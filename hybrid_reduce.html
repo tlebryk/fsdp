@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP Hybrid: Reduce-Scatter + All-Reduce</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background: #0f1117;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+
+  h1 { font-size: 1.4rem; font-weight: 600; letter-spacing: 0.04em; margin-bottom: 8px; color: #f0f0f0; }
+  .subtitle { font-size: 0.85rem; color: #888; margin-bottom: 32px; text-align: center; max-width: 560px; }
+
+  .stage-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #666;
+    margin-bottom: 12px;
+  }
+  .stage-label.stage-1 { color: #34b3a4; }
+  .stage-label.stage-2 { color: #d4785c; }
+
+  #stage {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    align-items: center;
+    max-width: 720px;
+  }
+
+  /* Paper-style grid: rows = sharding groups, cols = replication groups */
+  .hybrid-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #2a2d3a;
+  }
+
+  .sharding-row {
+    display: flex;
+    gap: 0;
+    min-height: 100px;
+  }
+
+  .sharding-row.s1 {
+    background: rgba(52, 179, 164, 0.12);
+    border-bottom: 1px solid #2a2d3a;
+  }
+  .sharding-row.s2 {
+    background: rgba(212, 120, 92, 0.12);
+  }
+
+  .sharding-row.highlight-rs {
+    box-shadow: inset 0 0 0 2px rgba(52, 179, 164, 0.5);
+  }
+  .sharding-row.highlight-ar .replication-cell {
+    box-shadow: inset 0 0 0 2px rgba(212, 120, 92, 0.4);
+  }
+
+  .replication-cell {
+    flex: 1;
+    min-width: 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 8px;
+    border-right: 1px solid #2a2d3a;
+    transition: box-shadow 0.3s;
+  }
+  .replication-cell:last-child { border-right: none; }
+
+  .cell-rank {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #888;
+  }
+
+  .grad-buffer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 8px;
+    border-radius: 8px;
+    background: #1e2030;
+    border: 1px solid #2a2d3a;
+    min-height: 48px;
+    min-width: 96px;
+  }
+
+  /* Full gradient: a row of colored shard segments */
+  .grad-full {
+    display: flex;
+    border-radius: 6px;
+    overflow: hidden;
+    transition: opacity 0.3s;
+  }
+
+  .grad-segment {
+    width: 28px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: #fff;
+    transition: opacity 0.3s;
+  }
+
+  /* After reduce-scatter: each rank holds only 1 small shard */
+  .grad-shard {
+    width: 28px;
+    height: 32px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: #fff;
+    transition: box-shadow 0.2s;
+  }
+
+  .grad-shard.reduced { box-shadow: 0 0 0 2px rgba(52, 179, 164, 0.6); }
+  .grad-shard.synced { box-shadow: 0 0 0 2px rgba(212, 120, 92, 0.6); }
+
+  .floater {
+    position: absolute;
+    width: 28px;
+    height: 32px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: #fff;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  .grid-axes {
+    display: flex;
+    gap: 0;
+    margin-bottom: 4px;
+    padding-left: 44px;
+  }
+  .axis-col {
+    flex: 1;
+    min-width: 80px;
+    text-align: center;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: #666;
+  }
+  .grid-with-axes {
+    display: flex;
+    flex-direction: column;
+  }
+  .grid-row-labeled {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+  .axis-row {
+    width: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: #666;
+  }
+
+  .controls { margin-top: 28px; display: flex; gap: 12px; align-items: center; }
+  button {
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 10px 24px;
+    border-radius: 8px;
+    border: 1px solid #2a2d3a;
+    background: #1a1d27;
+    color: #e0e0e0;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button:hover { background: #24273a; border-color: #3a3d4a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .status { font-size: 0.8rem; color: #666; min-width: 280px; text-align: center; }
+
+  .legend { margin-top: 20px; display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; font-size: 0.75rem; color: #888; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>FSDP Hybrid: Reduce-Scatter + All-Reduce</h1>
+<p class="subtitle">Single diagram: Stage 1 reduce-scatter within sharding groups (rows), Stage 2 all-reduce within replication groups (columns)</p>
+
+<div id="stage"></div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+  <button id="btn-mode">Mode: parallel</button>
+  <div class="status" id="status">Ready</div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<script>
+// ── CONFIG ──────────────────────────────────────────────────────
+// Paper layout: rows = sharding groups (S1, S2), cols = replication groups (Rep0..Rep2)
+// S1 = {r0,r1,r2}, S2 = {r3,r4,r5} — 6 ranks total
+// Repj = {rj, r(j+3)} — one rank from each sharding group
+const CONFIG = {
+  shardingGroups: [[0, 1, 2], [3, 4, 5]],
+  replicationGroups: [[0, 3], [1, 4], [2, 5]],
+  shardColors: [
+    { bg: "linear-gradient(135deg, #34b3a4, #2a8f83)", solid: "#2f9d90" },
+    { bg: "linear-gradient(135deg, #d4785c, #b8604a)", solid: "#c96f4f" },
+    { bg: "linear-gradient(135deg, #8b7cc8, #6b5cb8)", solid: "#7a6ac8" },
+    { bg: "linear-gradient(135deg, #5cb88b, #4a9a70)", solid: "#52a87a" },
+  ],
+  sgColors: { s1: "rgba(52, 179, 164, 0.2)", s2: "rgba(212, 120, 92, 0.2)" },
+};
+const stage = document.getElementById("stage");
+const statusEl = document.getElementById("status");
+const gradEls = {};   // gradEls[rank] = gradient element
+const rowEls = {};   // rowEls[sgIdx] = sharding row element (for reduce center)
+
+function buildDOM() {
+  stage.innerHTML = "";
+
+  const gridWithAxes = document.createElement("div");
+  gridWithAxes.className = "grid-with-axes";
+
+  // Column labels (replication groups)
+  const colLabels = document.createElement("div");
+  colLabels.className = "grid-axes";
+  colLabels.innerHTML = '<div style="width:44px"></div>';
+  CONFIG.replicationGroups.forEach((_, j) => {
+    const ax = document.createElement("div");
+    ax.className = "axis-col";
+    ax.textContent = `Rep${j}`;
+    ax.title = "Replication group";
+    colLabels.appendChild(ax);
+  });
+  gridWithAxes.appendChild(colLabels);
+
+  // Grid rows with row labels (S1, S2)
+  const grid = document.createElement("div");
+  grid.className = "hybrid-grid";
+
+  CONFIG.shardingGroups.forEach((sg, si) => {
+    const rowWrap = document.createElement("div");
+    rowWrap.className = "grid-row-labeled";
+
+    const rowLabel = document.createElement("div");
+    rowLabel.className = "axis-row";
+    rowLabel.textContent = `S${si + 1}`;
+    rowLabel.style.color = si === 0 ? "#2f9d90" : "#c96f4f";
+    rowWrap.appendChild(rowLabel);
+
+    const row = document.createElement("div");
+    row.className = `sharding-row s${si + 1}`;
+    row.id = `sg-${si}`;
+    row.style.flex = "1";
+
+    sg.forEach((rank, colIdx) => {
+      const cell = document.createElement("div");
+      cell.className = "replication-cell";
+      cell.id = `cell-${rank}`;
+      cell.dataset.rank = String(rank);
+      cell.dataset.sg = String(si);
+      cell.dataset.col = String(colIdx);
+
+      const rankLabel = document.createElement("div");
+      rankLabel.className = "cell-rank";
+      rankLabel.textContent = `r${rank}`;
+      rankLabel.title = "Rank";
+      cell.appendChild(rankLabel);
+
+      const buf = document.createElement("div");
+      buf.className = "grad-buffer";
+      buf.id = `buf-${rank}`;
+
+      const gradBlock = document.createElement("div");
+      gradBlock.className = "grad-full";
+      gradBlock.dataset.rank = String(rank);
+      // Each full gradient is visually split into N segments (one per shard)
+      const groupSize = sg.length;
+      for (let s = 0; s < groupSize; s++) {
+        const seg = document.createElement("div");
+        seg.className = "grad-segment";
+        seg.dataset.shardIdx = String(s);
+        seg.textContent = `g${s}`;
+        seg.style.background = CONFIG.shardColors[s % CONFIG.shardColors.length].solid;
+        // Highlight the segment that this rank "owns"
+        if (s === colIdx) {
+          seg.style.outline = "2px solid #fff";
+          seg.style.outlineOffset = "-2px";
+        }
+        gradBlock.appendChild(seg);
+      }
+      buf.appendChild(gradBlock);
+      gradEls[rank] = gradBlock;
+
+      cell.appendChild(buf);
+      row.appendChild(cell);
+    });
+
+    rowWrap.appendChild(row);
+    grid.appendChild(rowWrap);
+    rowEls[si] = row;
+  });
+
+  gridWithAxes.appendChild(grid);
+  stage.appendChild(gridWithAxes);
+
+  document.getElementById("legend").innerHTML = `
+    <div class="legend-item"><div class="legend-swatch" style="background:rgba(52,179,164,0.5)"></div> Sharding group S₁</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:rgba(212,120,92,0.5)"></div> Sharding group S₂</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#34b3a4"></div> Stage 1: Reduce-Scatter (intra-row)</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#d4785c"></div> Stage 2: All-Reduce (intra-column)</div>
+    <div class="legend-item"><span>r = rank, Rep = replication group</span></div>
+  `;
+}
+
+const FLY_MS = 700;
+let animating = false;
+let phase = 0;
+let mode = "parallel"; // "parallel" | "sequential"
+
+function getPos(el) {
+  const sr = stage.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  return { x: r.left - sr.left, y: r.top - sr.top };
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Fly animation that does NOT fade source (for all-reduce)
+function flyBetween(srcEl, dstEl, text, color) {
+  const srcPos = getPos(srcEl);
+  const dstPos = getPos(dstEl);
+  return new Promise(resolve => {
+    const f = document.createElement("div");
+    f.className = "floater";
+    f.textContent = text;
+    f.style.background = color;
+    f.style.left = srcPos.x + "px";
+    f.style.top = srcPos.y + "px";
+    f.style.opacity = "0";
+    f.style.transition = `left ${FLY_MS}ms cubic-bezier(0.25,0.8,0.25,1), top ${FLY_MS}ms cubic-bezier(0.25,0.8,0.25,1), opacity 150ms ease`;
+    stage.appendChild(f);
+    requestAnimationFrame(() => {
+      f.style.opacity = "1";
+      requestAnimationFrame(() => {
+        f.style.left = dstPos.x + "px";
+        f.style.top = dstPos.y + "px";
+      });
+    });
+    setTimeout(() => { f.remove(); resolve(); }, FLY_MS + 50);
+  });
+}
+
+// Fly animation that fades source segment (for reduce-scatter)
+function flyChunk(srcEl, dstEl, text, color) {
+  const srcPos = getPos(srcEl);
+  const dstPos = getPos(dstEl);
+  return new Promise(resolve => {
+    const f = document.createElement("div");
+    f.className = "floater";
+    f.textContent = text;
+    f.style.background = color;
+    f.style.left = srcPos.x + "px";
+    f.style.top = srcPos.y + "px";
+    f.style.opacity = "0";
+    f.style.transition = `left ${FLY_MS}ms cubic-bezier(0.25,0.8,0.25,1), top ${FLY_MS}ms cubic-bezier(0.25,0.8,0.25,1), opacity 150ms ease`;
+    stage.appendChild(f);
+    // Fade out the source segment
+    srcEl.style.opacity = "0.2";
+    requestAnimationFrame(() => {
+      f.style.opacity = "1";
+      requestAnimationFrame(() => {
+        f.style.left = dstPos.x + "px";
+        f.style.top = dstPos.y + "px";
+      });
+    });
+    setTimeout(() => { f.remove(); resolve(); }, FLY_MS + 50);
+  });
+}
+
+function resetAll() {
+  phase = 0;
+  document.querySelectorAll(".sharding-row").forEach(el => el.classList.remove("highlight-rs", "highlight-ar"));
+
+  CONFIG.shardingGroups.forEach((group, si) => {
+    group.forEach((rank, colIdx) => {
+      const el = gradEls[rank];
+      el.className = "grad-full";
+      el.style.opacity = "1";
+      // Rebuild segments
+      el.innerHTML = "";
+      const groupSize = group.length;
+      for (let s = 0; s < groupSize; s++) {
+        const seg = document.createElement("div");
+        seg.className = "grad-segment";
+        seg.dataset.shardIdx = String(s);
+        seg.textContent = `g${s}`;
+        seg.style.background = CONFIG.shardColors[s % CONFIG.shardColors.length].solid;
+        if (s === colIdx) {
+          seg.style.outline = "2px solid #fff";
+          seg.style.outlineOffset = "-2px";
+        }
+        el.appendChild(seg);
+      }
+    });
+  });
+}
+
+// Collect flight tasks for one shard owner within a group
+function collectFlightsForOwner(group, ownerCol) {
+  const ownerRank = group[ownerCol];
+  const ownerEl = gradEls[ownerRank];
+  const flights = [];
+  for (let srcCol = 0; srcCol < group.length; srcCol++) {
+    if (srcCol === ownerCol) continue;
+    const srcRank = group[srcCol];
+    const srcEl = gradEls[srcRank];
+    const srcSeg = srcEl.querySelector(`[data-shard-idx="${ownerCol}"]`);
+    if (!srcSeg) continue;
+    flights.push(
+      flyChunk(srcSeg, ownerEl, `g${ownerCol}`, CONFIG.shardColors[ownerCol % CONFIG.shardColors.length].solid)
+    );
+  }
+  return flights;
+}
+
+// Mark the owner's segment as reduced (in-place, keeps other segments visible)
+function markOwnerReduced(group, ownerCol, sgIdx) {
+  const rank = group[ownerCol];
+  const el = gradEls[rank];
+  const seg = el.querySelector(`[data-shard-idx="${ownerCol}"]`);
+  if (!seg) return;
+  const sgLabel = sgIdx + 1;
+  seg.textContent = `Σg${ownerCol}`;
+  seg.style.outline = "2px solid #fff";
+  seg.style.outlineOffset = "-2px";
+  seg.style.opacity = "1";
+}
+
+// Collapse entire grad-full into just the owned shard
+function collapseToShard(group, colIdx, sgIdx) {
+  const rank = group[colIdx];
+  const el = gradEls[rank];
+  const sgLabel = sgIdx + 1;
+  el.className = "grad-shard reduced";
+  el.innerHTML = "";
+  el.textContent = `Σg${colIdx}`;
+  el.style.background = CONFIG.shardColors[colIdx % CONFIG.shardColors.length].solid;
+  el.style.opacity = "1";
+  const sub = document.createElement("span");
+  sub.style.fontSize = "0.4rem";
+  sub.style.opacity = "0.7";
+  sub.style.marginLeft = "1px";
+  sub.textContent = `s${sgLabel}`;
+  el.appendChild(sub);
+}
+
+async function animateStage1() {
+  const modeLabel = mode === "parallel" ? "parallel" : "sequential";
+  statusEl.textContent = `Stage 1: Reduce-Scatter (${modeLabel}) — each rank collects & sums only its assigned shard…`;
+  document.getElementById("sg-0").classList.add("highlight-rs");
+  document.getElementById("sg-1").classList.add("highlight-rs");
+  await sleep(500);
+
+  for (const [sgIdx, group] of CONFIG.shardingGroups.entries()) {
+    const sgLabel = `S${sgIdx + 1}`;
+
+    if (mode === "sequential") {
+      // One shard owner at a time — easier to follow
+      for (let ownerCol = 0; ownerCol < group.length; ownerCol++) {
+        const ownerRank = group[ownerCol];
+        statusEl.textContent = `Reduce-Scatter in ${sgLabel}: r${ownerRank} collects shard g${ownerCol}…`;
+        const flights = collectFlightsForOwner(group, ownerCol);
+        await Promise.all(flights);
+        // Immediately mark this owner's segment as reduced (keeps other segments)
+        markOwnerReduced(group, ownerCol, sgIdx);
+        await sleep(400);
+      }
+    } else {
+      // All shards fly simultaneously — what actually happens
+      statusEl.textContent = `Reduce-Scatter in ${sgLabel}: all chunks fly to owners simultaneously…`;
+      const flights = [];
+      for (let ownerCol = 0; ownerCol < group.length; ownerCol++) {
+        flights.push(...collectFlightsForOwner(group, ownerCol));
+      }
+      await Promise.all(flights);
+      await sleep(200);
+      for (let ownerCol = 0; ownerCol < group.length; ownerCol++) {
+        markOwnerReduced(group, ownerCol, sgIdx);
+      }
+    }
+
+    await sleep(400);
+
+    // Now collapse: each rank discards faded segments, keeps only its shard
+    for (let ownerCol = 0; ownerCol < group.length; ownerCol++) {
+      collapseToShard(group, ownerCol, sgIdx);
+    }
+    await sleep(400);
+  }
+
+  phase = 1;
+  statusEl.textContent = "Stage 1 done — each rank holds 1/N of the reduced gradient (only within its sharding group).";
+  await sleep(800);
+}
+
+function finalizeRepGroup(colIdx) {
+  const [r0, r1] = CONFIG.replicationGroups[colIdx];
+  [r0, r1].forEach(rank => {
+    const el = gradEls[rank];
+    el.innerHTML = "";
+    el.textContent = `Σg${colIdx}`;
+    el.classList.remove("reduced");
+    el.classList.add("synced");
+  });
+}
+
+async function animateStage2() {
+  const modeLabel = mode === "parallel" ? "parallel" : "sequential";
+  statusEl.textContent = `Stage 2: All-Reduce (${modeLabel}) — sync shards across replication groups…`;
+  document.querySelectorAll(".sharding-row").forEach(el => el.classList.remove("highlight-rs"));
+  document.querySelectorAll(".sharding-row").forEach(el => el.classList.add("highlight-ar"));
+
+  if (mode === "sequential") {
+    // One replication group at a time
+    for (let colIdx = 0; colIdx < CONFIG.replicationGroups.length; colIdx++) {
+      const [r0, r1] = CONFIG.replicationGroups[colIdx];
+      const shard0 = gradEls[r0];
+      const shard1 = gradEls[r1];
+      statusEl.textContent = `All-Reduce: syncing shard g${colIdx} between r${r0} and r${r1}…`;
+
+      await flyBetween(shard0, shard1, shard0.textContent, CONFIG.shardColors[colIdx % CONFIG.shardColors.length].solid);
+      await flyBetween(shard1, shard0, shard1.textContent, CONFIG.shardColors[colIdx % CONFIG.shardColors.length].solid);
+
+      finalizeRepGroup(colIdx);
+      await sleep(350);
+    }
+  } else {
+    // All replication groups exchange simultaneously
+    statusEl.textContent = "All-Reduce: all replication groups exchange simultaneously…";
+    const flights = [];
+    for (let colIdx = 0; colIdx < CONFIG.replicationGroups.length; colIdx++) {
+      const [r0, r1] = CONFIG.replicationGroups[colIdx];
+      const shard0 = gradEls[r0];
+      const shard1 = gradEls[r1];
+      const color = CONFIG.shardColors[colIdx % CONFIG.shardColors.length].solid;
+      flights.push(flyBetween(shard0, shard1, shard0.textContent, color));
+      flights.push(flyBetween(shard1, shard0, shard1.textContent, color));
+    }
+    await Promise.all(flights);
+
+    for (let colIdx = 0; colIdx < CONFIG.replicationGroups.length; colIdx++) {
+      finalizeRepGroup(colIdx);
+    }
+    await sleep(350);
+  }
+
+  phase = 2;
+  statusEl.textContent = "Done. Gradients reduced: Reduce-Scatter (intra-row) then All-Reduce (intra-column).";
+}
+
+async function playAll() {
+  if (animating) return;
+  animating = true;
+  document.querySelectorAll("button").forEach(b => b.disabled = true);
+  resetAll();
+  await sleep(200);
+  await animateStage1();
+  await animateStage2();
+  animating = false;
+  document.querySelectorAll("button").forEach(b => b.disabled = false);
+}
+
+async function stepOnce() {
+  if (animating) return;
+  animating = true;
+  document.querySelectorAll("button").forEach(b => b.disabled = true);
+  if (phase === 0) await animateStage1();
+  else if (phase === 1) await animateStage2();
+  else { phase = 0; resetAll(); statusEl.textContent = "Ready"; }
+  animating = false;
+  document.querySelectorAll("button").forEach(b => b.disabled = false);
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-reset").addEventListener("click", () => {
+  if (!animating) { phase = 0; resetAll(); statusEl.textContent = "Ready"; }
+});
+document.getElementById("btn-mode").addEventListener("click", () => {
+  if (animating) return;
+  mode = mode === "parallel" ? "sequential" : "parallel";
+  document.getElementById("btn-mode").textContent = `Mode: ${mode}`;
+});
+
+buildDOM();
+</script>
+</body>
+</html>

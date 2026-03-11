@@ -1,0 +1,67 @@
+\section{System Design}\label{sec:design}
+
+\input{text/design_overview}
+\input{text/design_model_init}
+\input{text/design_sharding}
+
+
+\subsection{Communication Optimizations}
+
+The FSDP framework incorporates a range of native communication optimization techniques. This section unveils four major ones: overlapping, backward pre-fetching, forward pre-fetching, and accumulation. 
+
+\subsubsection{Overlapping Communication and Computation} \hfill \break
+
+The PyTorch \code{c10d} library has a \code{ProcessGroup} abstraction that represents a group of processes that can run collectives together. For the NCCL backend, the \code{ProcessGroupNCCL} implementation has an internal NCCL stream per device, where the separate internal stream is for asynchronous execution with the current stream, which is typically the default stream running computation. Those asynchronous collectives return \code{Work} objects, where calling \code{Work.wait()} blocks the CPU thread until the collective finishes. For general correctness, \code{ProcessGroupNCCL} synchronizes the internal stream with the current stream before running the collective. \code{DistributedDataParallel} leverages the async-collective-and-\code{wait()} approach to overlap the gradient \code{All-Reduce}s with backward computation. However, in contrast to DDP's backward where the \code{AllReduce} \textit{proceeds} the computation with which to overlap, FSDP's forward issues the \code{AllGather} \textit{following} the computation with which to overlap since in eager execution, FSDP cannot know which \code{FlatParameter} to \code{AllGather} next to reorder it before the computation. This difference in kernel-issue order makes following the async-collective-and-\code{wait()} approach infeasible for FSDP. Namely, since \code{ProcessGroupNCCL} synchronizes with the current (default) stream, the \code{All-Gather} will not run until the computation with which to overlap finishes. To address this, FSDP uses a separate CUDA stream to issue the \code{AllGather}s, bypassing the false dependency on preceding computation in the default stream and allowing each \code{AllGather} to overlap. As a result, FSDP's collective synchronization operates on streams, not simply \code{Work} objects. Figure~\ref{fig:overlap} illustrates one example. Note that the backward pass excludes the \code{AG0} \code{All-Gather} because FSDP intentionally keeps the outermost FSDP unit's parameters in memory to avoid redundantly freeing at the end of forward and then re-\code{All-Gather}ing to begin backward.
+
+% As a side optimization, both the \code{ReduceScatter} and \code{AllReduce} (when hybrid shard is on) can run asynchronously with respect to the backward pass, as they are not needed until the optimizer step.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=\linewidth]{figure/overlap.pdf}
+    \caption{Overlap Communication and Computation}
+    \label{fig:overlap}
+\end{figure}
+
+\subsubsection{Backward Prefetching} \hfill \break
+
+FSDP enforces a single CUDA device per rank and uses a single process group for both \code{AllGather} and \code{ReduceScatter}, which means that its collectives run sequentially in the process group's internal NCCL stream. In the backward pass, FSDP issues the \code{ReduceScatter} for the current \code{FlatParameter} and then the \code{AllGather} for the next \code{FlatParameter}. Hence, the single NCCL stream forces the \code{ReduceScatter} to block the next \code{AllGather}, which in turn blocks the next gradient computation and may become exposed on the critical path.
+
+To avoid two consecutive exposed communication calls in the backward pass, FSDP \textit{backward prefetching} issues the next \code{AllGather} before the current \code{ReduceScatter}. However, as mentioned before, a challenge for eager execution is knowing which \code{FlatParameter} to \code{AllGather} next. FSDP resolved this challenge by recording the reverse forward execution order of modules as the proxy of their backward execution order. Moreover, the forward order is freshly recorded each iteration, meaning that the \textit{backward prefetching} is compatible with dynamism across iterations.
+
+%\todo[inline]{Backward prefetching figure: reorder RS and AG}
+
+\subsubsection{Forward Prefetching} \hfill \break
+
+For some workloads with relatively slow CPU execution, the CPU thread may not be able to issue the next forward \code{AllGather} early enough to efficiently fill the NCCL stream. If the model follows a static computational graph across iterations, then FSDP can assume the forward execution order of modules from the previous iteration and prefetch the next \code{AllGather} explicitly in the forward pass. This \textit{forward prefetching} issues the next \code{AllGather} before forward computation of current FSDP unit.
+
+
+\subsubsection{Gradient Accumulation} \hfill \break
+
+FSDP offers two variations of gradient accumulation: with and without communication. With communication, FSDP still reduces gradients across ranks, and each rank saves the sharded gradients. Simply running multiple iterations without clearing gradients achieves this. Without communication, FSDP does not reduce gradients across ranks, and each rank saves the unsharded gradients. This latter variation trades off increased memory usage with decreased communication, which can increase end-to-end throughput.
+
+
+\subsection{Memory Management}\label{sec:memory_management}
+
+%\subsubsection{Rate Limiter} \hfill \break
+PyTorch uses a CUDA caching allocator as a middle layer to serve GPU allocation and free requests for PyTorch programs. In order to effectively manage memory, FSDP uses a \textit{rate limiter} to take into account the memory impact of the caching allocator on programs that use several CUDA streams and run fast CPU threads.
+
+\subsubsection{How Does PyTorch Caching Allocator Affect Memory}
+\label{subsubsection:pytorch caching allocator}\hfill \break
+
+The caching allocator avoids frequent calls to \code{cudaMalloc} and \code{cudaFree}, where the latter incurs a costly device synchronization. Specifically, the caching allocator requests CUDA memory blocks and internally determines how to split and reuse the blocks without returning them to CUDA with the goal being to reach a steady state without further calls to \code{cudaMalloc} and \code{cudaFree}.
+
+The caching allocator runs from the CPU thread, meaning that it must decide which caching allocator block to use for an allocation when the \textit{CPU thread} processes the allocation request. It cannot wait until the GPU kernel needing the allocation actually runs, which may be much later. 
+
+For a single stream, the caching allocator can directly reuse memory blocks by the stream's sequential ordering semantics. However, for separate producer and consumer streams, there are no inter-stream ordering guarantees, and the caching allocator cannot be certain that a block is safe to reuse until the last \textit{GPU kernel} depending on that memory finishes running. Hence, if the CPU thread runs far ahead of the GPU execution, then the caching allocator cannot reuse blocks for the producer stream with pending GPU kernels from the consumer stream.
+
+Furthermore, caching allocator blocks are allocated \textit{per stream} and cannot be reused for a different stream, this over-allocates blocks to the producer stream that could otherwise be used for the consumer stream (\textit{e.g.}\ for activations). The GPU itself may have enough memory to serve a new allocation in the consumer stream, but the overallocation to the producer stream may lead to the caching allocator failing to serve it. This forces a blocking sequence of \code{cudaFree}s to reset the caching allocator memory state called a \code{cudaMalloc} retry that greatly degrades training throughput.
+
+\subsubsection{Rate Limiter}
+\label{subsubsection:rate limiter}\hfill \break
+
+FSDP allocates the \code{AllGather} destination tensor representing the unsharded \code{FlatParameter} in a producer stream, and the forward and backward computations using the \code{AllGather}ed parameters run in a consumer stream (typically the default stream). For a fast CPU thread, there may be pending GPU computation kernels when the caching allocator must serve the next \code{AllGather}, leading to no block reuse. Even after the blocks are not active in the \code{AllGather} producer stream, these reserved blocks can not serve default computation stream's allocation requests, and thus may force blocking \code{cudaFree}s and \code{cudaMalloc}s. 
+
+%\todo[inline]{Add figures showing that CPU allocation must be served after previous GPU computation to reuse the block}
+
+FSDP offers a \textit{rate limiter} that intentionally blocks the CPU thread to ensure proper caching allocator block reuse. It allows at most two inflight \code{AllGather}s, which is the minimum amount to still achieve communication and computation overlap.
+

@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP All-Gather</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background: #0f1117;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+
+  h1 { font-size: 1.4rem; font-weight: 600; letter-spacing: 0.04em; margin-bottom: 8px; color: #f0f0f0; }
+  .subtitle { font-size: 0.85rem; color: #888; margin-bottom: 32px; }
+
+  #stage {
+    position: relative;
+    display: flex;
+    gap: 40px;
+    justify-content: center;
+  }
+
+  .rank {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+    width: 280px;
+  }
+
+  .rank-label {
+    text-align: center;
+    font-size: 0.95rem;
+    font-weight: 700;
+    padding: 10px;
+    border-radius: 10px;
+    background: #1a1d27;
+    border: 1px solid #2a2d3a;
+  }
+
+  .buffer-section { display: flex; flex-direction: column; gap: 6px; }
+
+  .buffer-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #666;
+    padding-left: 4px;
+  }
+
+  .buffer {
+    display: flex;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 12px;
+    background: #161821;
+    border: 1px solid #2a2d3a;
+    min-height: 72px;
+    align-items: center;
+    flex-wrap: wrap;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+
+  .param {
+    width: 56px;
+    height: 48px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+
+  .param.empty {
+    background: #1e2030;
+    border: 1px dashed #333;
+    color: transparent;
+  }
+
+  .param.source-glow {
+    transform: scale(1.05);
+  }
+
+  .floater {
+    position: absolute;
+    width: 56px;
+    height: 48px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #fff;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  .controls {
+    margin-top: 28px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 10px 24px;
+    border-radius: 8px;
+    border: 1px solid #2a2d3a;
+    background: #1a1d27;
+    color: #e0e0e0;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button:hover { background: #24273a; border-color: #3a3d4a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.active { border-color: #5a6; background: #1e2a1e; }
+
+  .status { font-size: 0.8rem; color: #666; min-width: 200px; text-align: center; }
+  .status .unit-name { font-weight: 700; }
+
+  .legend { margin-top: 20px; display: flex; gap: 24px; font-size: 0.75rem; color: #888; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>FSDP All-Gather</h1>
+<p class="subtitle">Parameters float from shard buffers to output buffers during materialization</p>
+
+<div id="stage"></div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+  <button id="btn-mode">Mode: parallel</button>
+  <div class="status" id="status">Ready</div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<script>
+// ── CONFIG ──────────────────────────────────────────────────────
+// To extend: add ranks, add units, change shard assignments.
+// Each unit lists its params and which rank holds each shard.
+const CONFIG = {
+  ranks: [0, 1],
+  units: [
+    {
+      id: "u1",
+      label: "Unit 1",
+      color: { bg: "linear-gradient(135deg, #34b3a4, #2a8f83)", solid: "#2f9d90", glow: "rgba(47,157,144,0.4)", soft: "rgba(47,157,144,0.15)" },
+      // each param: { name, rank } — which rank holds the shard
+      params: [
+        { name: "p0", rank: 0 },
+        { name: "p1", rank: 1 },
+      ],
+    },
+    {
+      id: "u2",
+      label: "Unit 2",
+      color: { bg: "linear-gradient(135deg, #d4785c, #b8604a)", solid: "#c96f4f", glow: "rgba(201,111,79,0.4)", soft: "rgba(201,111,79,0.15)" },
+      params: [
+        { name: "p2", rank: 0 },
+        { name: "p3", rank: 0 },
+        { name: "p4", rank: 1 },
+        { name: "p5", rank: 1 },
+      ],
+    },
+  ],
+};
+
+// ── DERIVED ─────────────────────────────────────────────────────
+const maxUnitSize = Math.max(...CONFIG.units.map(u => u.params.length));
+const shardsPerRank = CONFIG.ranks.map(r =>
+  CONFIG.units.flatMap(u => u.params.filter(p => p.rank === r).map(p => ({ ...p, unit: u })))
+);
+
+// ── DOM GENERATION ──────────────────────────────────────────────
+const stage = document.getElementById("stage");
+const statusEl = document.getElementById("status");
+const legendEl = document.getElementById("legend");
+
+// element lookup tables
+const outSlots = {};   // outSlots[rankIdx][slotIdx] = element
+const shardEls = {};   // shardEls["p0"] = element on the rank that owns it
+
+function buildDOM() {
+  stage.innerHTML = "";
+
+  CONFIG.ranks.forEach((rankId, ri) => {
+    const col = document.createElement("div");
+    col.className = "rank";
+
+    // rank label
+    const label = document.createElement("div");
+    label.className = "rank-label";
+    label.textContent = `Rank ${rankId}`;
+    col.appendChild(label);
+
+    // output buffer
+    const outSection = document.createElement("div");
+    outSection.className = "buffer-section";
+    const outLabel = document.createElement("div");
+    outLabel.className = "buffer-label";
+    outLabel.textContent = `Output Buffer (${maxUnitSize} params)`;
+    outSection.appendChild(outLabel);
+
+    const outBuf = document.createElement("div");
+    outBuf.className = "buffer";
+    outBuf.id = `out-${ri}`;
+    outSlots[ri] = [];
+    for (let i = 0; i < maxUnitSize; i++) {
+      const slot = document.createElement("div");
+      slot.className = "param empty";
+      slot.id = `out-${ri}-${i}`;
+      outBuf.appendChild(slot);
+      outSlots[ri].push(slot);
+    }
+    outSection.appendChild(outBuf);
+    col.appendChild(outSection);
+
+    // shard buffer
+    const shardSection = document.createElement("div");
+    shardSection.className = "buffer-section";
+    const shardLabel = document.createElement("div");
+    shardLabel.className = "buffer-label";
+    shardLabel.textContent = `Shard Buffer (${shardsPerRank[ri].length} params)`;
+    shardSection.appendChild(shardLabel);
+
+    const shardBuf = document.createElement("div");
+    shardBuf.className = "buffer";
+    shardBuf.id = `shard-${ri}`;
+    shardsPerRank[ri].forEach(sp => {
+      const el = document.createElement("div");
+      el.className = "param";
+      el.style.background = sp.unit.color.bg;
+      el.style.color = "#fff";
+      el.style.border = "1px solid rgba(255,255,255,0.1)";
+      el.textContent = sp.name;
+      el.id = `s-${sp.name}`;
+      shardBuf.appendChild(el);
+      shardEls[sp.name] = el;
+    });
+    shardSection.appendChild(shardBuf);
+    col.appendChild(shardSection);
+
+    stage.appendChild(col);
+  });
+
+  // legend
+  legendEl.innerHTML = "";
+  CONFIG.units.forEach(u => {
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    const swatch = document.createElement("div");
+    swatch.className = "legend-swatch";
+    swatch.style.background = u.color.solid;
+    item.appendChild(swatch);
+    const names = u.params.map(p => p.name).join(", ");
+    item.appendChild(document.createTextNode(`${u.label} (${u.params.length} params: ${names})`));
+    legendEl.appendChild(item);
+  });
+}
+
+// ── ANIMATION ENGINE ────────────────────────────────────────────
+const FLY_MS = 1200;
+const PAUSE_MS = 1200;
+
+let currentStep = 0;
+let animating = false;
+let mode = "parallel"; // "parallel" | "sequential"
+
+function getPos(el) {
+  const sr = stage.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  return { x: r.left - sr.left, y: r.top - sr.top };
+}
+
+function clearOutputs() {
+  CONFIG.ranks.forEach((_, ri) => {
+    outSlots[ri].forEach(slot => {
+      slot.className = "param empty";
+      slot.textContent = "";
+      slot.style.background = "";
+      slot.style.color = "";
+      slot.style.border = "";
+    });
+    const buf = document.getElementById(`out-${ri}`);
+    buf.style.borderColor = "";
+    buf.style.boxShadow = "";
+  });
+  Object.values(shardEls).forEach(el => {
+    el.classList.remove("source-glow");
+    el.style.boxShadow = "";
+  });
+  stage.querySelectorAll(".floater").forEach(f => f.remove());
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function flyParam(srcEl, dstEl, unit, paramName) {
+  return new Promise(resolve => {
+    const srcPos = getPos(srcEl);
+    const dstPos = getPos(dstEl);
+
+    const f = document.createElement("div");
+    f.className = "floater";
+    f.textContent = paramName;
+    f.style.background = unit.color.bg;
+    f.style.boxShadow = `0 8px 24px ${unit.color.glow}`;
+    f.style.left = srcPos.x + "px";
+    f.style.top = srcPos.y + "px";
+    f.style.opacity = "0";
+    f.style.transition = `left ${FLY_MS}ms cubic-bezier(0.25,0.8,0.25,1), top ${FLY_MS}ms cubic-bezier(0.25,0.8,0.25,1), opacity 150ms ease`;
+    stage.appendChild(f);
+
+    requestAnimationFrame(() => {
+      f.style.opacity = "1";
+      requestAnimationFrame(() => {
+        f.style.left = dstPos.x + "px";
+        f.style.top = dstPos.y + "px";
+      });
+    });
+
+    setTimeout(() => { f.remove(); resolve(); }, FLY_MS + 50);
+  });
+}
+
+function fillSlot(rankIdx, slotIdx, unit, paramName) {
+  const slot = outSlots[rankIdx][slotIdx];
+  slot.className = "param";
+  slot.style.background = unit.color.bg;
+  slot.style.color = "#fff";
+  slot.style.border = "1px solid rgba(255,255,255,0.1)";
+  slot.textContent = paramName;
+}
+
+function highlightBuffers(unit) {
+  CONFIG.ranks.forEach((_, ri) => {
+    const buf = document.getElementById(`out-${ri}`);
+    buf.style.borderColor = unit.color.solid;
+    buf.style.boxShadow = `0 0 20px ${unit.color.soft}`;
+  });
+}
+
+function glowSources(unit) {
+  unit.params.forEach(p => {
+    const el = shardEls[p.name];
+    el.classList.add("source-glow");
+    el.style.boxShadow = `0 0 0 4px ${unit.color.glow}, 0 4px 16px ${unit.color.glow}`;
+  });
+}
+
+function unglowSources(unit) {
+  unit.params.forEach(p => {
+    const el = shardEls[p.name];
+    el.classList.remove("source-glow");
+    el.style.boxShadow = "";
+  });
+}
+
+// Sequential: one source param flies at a time (staggered)
+async function animateGatherSequential(unit) {
+  clearOutputs();
+  highlightBuffers(unit);
+  glowSources(unit);
+  statusEl.innerHTML = `All-Gather <span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> — sequential`;
+  await sleep(300);
+
+  for (let pi = 0; pi < unit.params.length; pi++) {
+    const p = unit.params[pi];
+    const srcEl = shardEls[p.name];
+
+    // fly to all ranks' output slot[pi] in parallel
+    const flights = CONFIG.ranks.map((_, ri) => {
+      const dstEl = outSlots[ri][pi];
+      return flyParam(srcEl, dstEl, unit, p.name);
+    });
+
+    await Promise.all(flights);
+
+    // fill slots
+    CONFIG.ranks.forEach((_, ri) => fillSlot(ri, pi, unit, p.name));
+
+    if (pi < unit.params.length - 1) await sleep(250);
+  }
+
+  unglowSources(unit);
+  statusEl.innerHTML = `<span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> materialized — ${unit.params.length} params`;
+}
+
+// Parallel: all source params fly simultaneously (real all-gather)
+async function animateGatherParallel(unit) {
+  clearOutputs();
+  highlightBuffers(unit);
+  glowSources(unit);
+  statusEl.innerHTML = `All-Gather <span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> — parallel`;
+  await sleep(300);
+
+  // fire every flight at once
+  const allFlights = [];
+  unit.params.forEach((p, pi) => {
+    const srcEl = shardEls[p.name];
+    CONFIG.ranks.forEach((_, ri) => {
+      allFlights.push(flyParam(srcEl, outSlots[ri][pi], unit, p.name));
+    });
+  });
+
+  await Promise.all(allFlights);
+
+  // fill all slots
+  unit.params.forEach((p, pi) => {
+    CONFIG.ranks.forEach((_, ri) => fillSlot(ri, pi, unit, p.name));
+  });
+
+  unglowSources(unit);
+  statusEl.innerHTML = `<span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> materialized — ${unit.params.length} params`;
+}
+
+async function animateGather(unit) {
+  if (mode === "sequential") {
+    await animateGatherSequential(unit);
+  } else {
+    await animateGatherParallel(unit);
+  }
+}
+
+// ── CONTROLS ────────────────────────────────────────────────────
+const btnPlay = document.getElementById("btn-play");
+const btnStep = document.getElementById("btn-step");
+const btnReset = document.getElementById("btn-reset");
+const btnMode = document.getElementById("btn-mode");
+
+function setButtons(disabled) {
+  btnPlay.disabled = disabled;
+  btnStep.disabled = disabled;
+}
+
+async function playAll() {
+  if (animating) return;
+  animating = true;
+  setButtons(true);
+  currentStep = 0;
+
+  for (let i = 0; i < CONFIG.units.length; i++) {
+    await animateGather(CONFIG.units[i]);
+    currentStep = i + 1;
+    if (i < CONFIG.units.length - 1) await sleep(PAUSE_MS);
+  }
+
+  statusEl.innerHTML += " — done";
+  animating = false;
+  setButtons(false);
+}
+
+async function stepOnce() {
+  if (animating) return;
+  if (currentStep >= CONFIG.units.length) currentStep = 0;
+  animating = true;
+  setButtons(true);
+
+  await animateGather(CONFIG.units[currentStep]);
+  currentStep++;
+
+  animating = false;
+  setButtons(false);
+}
+
+function reset() {
+  if (animating) return;
+  currentStep = 0;
+  clearOutputs();
+  statusEl.textContent = "Ready";
+}
+
+function toggleMode() {
+  mode = mode === "parallel" ? "sequential" : "parallel";
+  btnMode.textContent = `Mode: ${mode}`;
+}
+
+btnPlay.addEventListener("click", playAll);
+btnStep.addEventListener("click", stepOnce);
+btnReset.addEventListener("click", reset);
+btnMode.addEventListener("click", toggleMode);
+
+// ── INIT ────────────────────────────────────────────────────────
+buildDOM();
+</script>
+</body>
+</html>

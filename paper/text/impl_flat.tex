@@ -1,0 +1,11 @@
+\subsection{Flat Parameters}
+
+The \code{FlatParameter} class inherits from \code{nn.Parameter} and behaves like an \code{nn.Parameter}. FSDP implements an accompanying \code{FlatParamHandle} class that is responsible for managing individual \code{FlatParameter} instances. The frontend, either \code{FullyShardedDataParallel} or \code{fully\_shard}, interfaces with the \code{FlatParameter}s only through \code{FlatParamHandle}.
+
+One \code{FlatParameter} accommodates storage for all parameter tensors within one FSDP unit. The boundary of the FSDP unit controls the timing for \code{AllGather} and \code{ReduceScatter}, which has a direct impact on overall FSDP performance. In the ideal case, FSDP unit boundaries should align with model execution order. 
+
+%\todo[inline]{assign to Shen, need to explain tensor storage somewhere, maybe in background}
+
+FSDP has access to the model's static \code{nn.Module} structure at construction time. Fortunately, although this structure does not guarantee to faithfully represent model execution order, model authors conventionally translate layers and broader blocks to nested \code{nn.Module} definitions that may naturally have the desired parameter locality. FSDP can leverage that structure to choose the \code{FlatParameter} construction. Indeed, FSDP supports annotating \code{nn.Module}s and follows a simple rule: All parameters in the annotated \code{nn.Module} are assigned to one \code{FlatParameter}, excluding those parameters already assigned. This rule lends itself naturally to nested annotation, where blocks are annotated, forming well-sized \code{FlatParameter}s, and any residual parameters are assigned to their parent. 
+
+Another approach we explored is using the execution order and reconstructing \code{FlatParameter}s dynamically. This approach starts with an initial small \code{FlatParameter} construction, runs a possibly inefficient first iteration while observing the execution order, and reconstructs the \code{FlatParameter}s by coalescing the existing small \code{FlatParameter}s according to the observed order.

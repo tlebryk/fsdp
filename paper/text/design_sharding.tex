@@ -1,0 +1,112 @@
+
+\subsection{Sharding Strategies}\label{sec:sharding_strategy}
+
+The \emph{sharding strategy} is an important element in FSDP that plays a significant role in determining the memory footprint and communication overhead.  FSDP offers a variety of sharding strategies, ranging from fully replicated to fully sharded. To generalize these sharding strategies, we introduce the \textit{sharding factor} $F$ as the number of ranks over which parameters are sharded. By setting the sharding factor to $1$, FSDP fully replicates the model and simplifies to vanilla data parallelism that uses \code{AllReduce} for gradient reduction. By setting the sharding factor equal to the number of devices (\emph{i.e.}, global world size $W$), FSDP fully shards the model, with each device only holding $\frac{1}{W}$ of the model. Hybrid sharding occurs when the sharding factor ranges between $1$ and $W$. The remainder of this section focuses on full sharding and hybrid sharding since the full replication strategy is similar to the existing DDP~\cite{ddp}.
+
+\subsubsection{Full Sharding}\label{sec:full_shard}\hfill \break
+
+The \emph{full sharding} strategy leads to the lowest memory footprint but incurs the most communication overhead, for example, \emph{full sharding} has 1.5x communication overhead and volume over DDP if using bandwidth optimal ring algorithm. Therefore, FSDP must carefully organize communications to maximize its efficiency under this strategy.
+
+\begin{figure}
+
+\begin{minipage}[c]{0.22\textwidth}
+  \centering
+  \includegraphics[width=\linewidth]{figure/time_per_all_gather_vs_config.pdf}
+  (a) Uneven Input Sizes
+\end{minipage}
+\begin{minipage}[c]{0.235\textwidth}
+  \centering
+  \includegraphics[width=\linewidth]{figure/time_vs_input_size.pdf}
+  (b) Reducing Input Size
+\end{minipage}
+\caption{Communication Efficiency vs. Input Size}\label{fig:comm_evidence}
+\end{figure}
+
+
+We conducted two sets of experiments to understand the impact of input size on collective communication efficiency. Results are shown in Figure~\ref{fig:comm_evidence}, which helped identify two ingredients for efficiencies:
+\begin{enumerate}
+    \item \textbf{Even Input Size:} The Nvidia NCCL~\cite{nccl} library offers efficient collective implementations for all-gather and reduce-scatter that require \emph{even} input tensor sizes across ranks.
+    \item \textbf{Larger Input Size:} For fixed communication volume, batching data and issuing fewer collectives improves performance by avoiding the collectives' launch overhead and increasing network bandwidth utilization.
+\end{enumerate}
+
+For (1), NCCL's \code{AllGather} API requires even input tensor size and writes outputs into one single tensor. PyTorch's \code{ProcessGroup} wraps the NCCL API and enhances it by supporting uneven input tensor sizes across ranks and allowing users to provide a list of output tensors. The flexibility comes with an efficiency trade-off, as shown in Figure~\ref{fig:comm_evidence}~(a). We use \code{All-Gather Base} to denote NCCL's \code{AllGather} behavior, and \code{All-Gather} to denote the one that takes a list of tensors as outputs. The latter incurs additional copies between the individual output tensors and the consolidated single large output tensor before and after the communication. Moreover, for uneven inputs, \code{ProcessGroup} mimics \code{AllGather}'s behavior using group \code{Broadcast}, which is slower than \code{All-Gather Base}. In the experiments, we created artificial unevenness by moving $1$ element and $1e6$ elements from rank 1 to rank 0 respectively. The results show that the \code{All-Gather Base} with even input size achieved highest efficiency. 
+
+For (2), Figure~\ref{fig:comm_evidence}~(b) fixes the total communication to be $2^{30} \approx 1\text{B}$ \code{FP32} elements and varies the size per \code{All-Gather}, \emph{i.e.}, smaller \code{AllGather} size means more \code{AllGather} invocations. Once the \code{AllGather} size decreases below $33\text{M}$ elements, the total communication time begins increasing rapidly.
+
+Thus, to deliver highly efficient communications, FSDP organizes all parameters within one FSDP unit into a large \code{FlatParameter}, where the \code{FlatParameter} coalesces the communications of its individual parameters and also evenly shards them across ranks. More specifically, the \code{FlatParameter} is a 1D tensor constructed by concatenating $p$ flattened original parameters and padding on the right to achieve a size divisible by the sharding factor. To shard the \code{FlatParameter}, FSDP divides it into equal-sized chunks, where the number of chunks equals the sharding factor, and assigns one chunk per rank. The \code{FlatParameter}'s gradient inherits the same unsharded and sharded shapes from the \code{FlatParameter}, and the \code{FlatParameter} and its gradient own the underlying storage of the original parameters and their gradients, respectively. Figure~\ref{fig:full_sharding} depicts one example, where we use one FSDP unit to shard a $4\times 3$ \code{nn.Linear} layer across 16 GPUs. In this case, every GPU only holds one element from the \code{FlatParameter} with the last rank holding the padded value. 
+
+\begin{figure}
+    \centering
+    \includegraphics[width=\linewidth]{figure/full_sharding.pdf}
+    \caption{Full Sharding Across 16 GPUs}
+    \label{fig:full_sharding}
+\end{figure}
+
+This flatten-concat-chunk algorithm permits each original parameter to have arbitrary shape while minimizing the required padding (to be at most $F-1$), reflecting its generality. 
+%However, the does come at the cost of structure: An original parameter may be split across ranks such that it cannot be reshaped to a sharded version of its original shape. Regardless, 
+Moreover, under this algorithm, the sharded and unsharded \code{FlatParameter} and its gradient have the exact data layout expected by \code{AllGather} and \code{ReduceScatter}, respectively. This enables calling the collectives without any additional copies for either the input or output tensors.
+% Thus, the \code{FlatParameter} and its gradient represent the atoms for FSDP's collectives.
+
+More formally, suppose for a model with $\Psi$ number of elements, FSDP constructs $N$ \code{FlatParameter}s with numels $\psi_1, \dots, \psi_N$, where $\sum_{i=1}^N \psi = \Psi$. For sharding factor $F$, the peak parameter memory contribution is in $O(\sum_{i=1}^N \frac{\psi_i}{F} + \max_{i=1}^N \psi_i)$ because FSDP always keeps each local sharded \code{FlatParameter} with size $\frac{\psi_i}{F}$ in GPU memory and must materialize each unsharded \code{FlatParameter} with size $\psi_i$ one by one during forward and backward. Since the first $\sum_{i=1}^N \psi_i = \Psi$ is fixed, the peak parameter memory contribution is determined by $\max_{i=1}^N \psi_i$. At the same time, the number of collectives per iteration is in $O(N)$. This evidences FSDP's memory-throughput trade-off: Finer-grained \code{FlatParameter} construction decreases peak memory but may decrease throughput by requiring more collectives. Users can control this trade-off by specifying how to wrap sub-modules into FSDP units.
+
+\subsubsection{Hybrid Sharding}\hfill \break
+
+We refer to the strategy when the sharding factor is greater than $1$ but less than $W$ as \textit{hybrid sharding}, as it combines both sharding and replication. For global world size $W$ and sharding factor $F$, the parameters are sharded within each group $S_1, \dots, S_{W/F}$ and are replicated within each complementary group $R_1, \dots, R_F$, where each $S_i, R_j \subseteq \{1, \dots, W\}$ gives the ranks in the sharded or replicated group, respectively.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=\linewidth]{figure/hybrid_sharding.pdf}
+    \caption{Hybrid Sharding on 16 GPUs: GPUs are configured into 2 sharding groups and 8 replication groups}
+    \label{fig:hybrid_sharding}
+\end{figure}
+
+For gradient reduction, the single reduce-scatter over all ranks becomes a reduce-scatter within each of the sharded groups followed by an all-reduce within each of the replicated groups to reduce the sharded gradients. The equivalence follows from the decomposition
+\begin{equation}
+    \sum_{r=1}^W g_r = \sum_{i=1}^{W/F} \sum_{r \in S_i} g_r,
+\end{equation}
+where $g_r$ represents the gradient on rank $r$.
+
+% \todo[inline]{Figure showing equivalence of global RS and RS + AR}
+
+Hybrid sharding can take advantage of datacenter locality for accelerated training and can reduce cross host traffic to avoid as much contention in the oversubscribed environment as possible. At the same time, it provides a graduating trade-off between memory saving and throughput degradation, which is particularly helpful for models whose required memory footprint when trained with full replication is just slightly above the device capacity and do not want full sharding. Figure~\ref{fig:hybrid_sharding} shows one example. 
+
+Specifically, datacenters typically adopt a fat-tree network topology~\cite{liu2017incbricks} with over-subscription, leading to abundant locality to exploit and a well-motivated reason to reduce cross-host traffic~\cite{luo2020plink}. Hybrid sharding can provide a natural mechanism to map the device mesh into the datacenter layout to exploit such locality. For example, consider a cluster as a group of $W$ accelerators grouped into hosts of of $G$ accelerators each (where the communication among accelerators on the same host is much faster than the communication across hosts), we can set $F = \frac{W}{G}$ to limit the \code{AllGather} (and \code{ReduceScatter}) operations within the same host, while creating a replication group for accelerators with the same local rank across hosts. For an $M$-sized model, we can then compute the total cross-host traffic per GPU in the hybrid setup to be $2M\frac{W-1}{GW}$, a drastic reduction compared to full replication's $2M\frac{W-1}{W}$ and full sharding's $3M\frac{W-1}{W}$. Additionally, since the \code{AllReduce} collectives used in hybrid sharding operates at a smaller world size, they empirically achieve a better performance than invoking collectives at the global scale (in the case of full replication and full sharding), due to straggler effects and larger network interference. 
+
+Another important design motivation for hybrid sharding is the needs from medium-sized models. These models are large enough to cause out of memory issues when trained with full replication but are not large enough to fully utilize accelerator memory when used with full sharding, leading to \emph{both} runtime overhead and memory waste. The hybrid sharding strategy creates a much richer memory-throughput trade-off space by simply adjusting $F$.
+
+% We highlight one particular case of hybrid sharding that is performant for medium-sized models. For context, communication backbones in modern datacenter components are both hierarchical and heterogeneous. The fat-tree topology~\cite{liu2017incbricks} with different link speeds at different levels and over-subscription naturally lead to abundant locality to exploit. Failure to tap into this property often results in subpar scalability and performance~\cite{luo2020plink}. In particular, clusters are typically organized as a group of nodes with each node consisting of a group of accelerators, where the communication is faster intra-node and slower intra-node. Thus, to exploit this heterogeneity, a performant choice of sharding factor is the intra-node size (\textit{e.g.}\ 8 for typical Nvidia GPU nodes), meaning that parameters are only sharded within each node. This changes the global reduce-scatter to an intra-node reduce-scatter followed by an inter-node all-reduce.
+
+\subsubsection{Autograd}
+\label{subsubsection:autograd}\hfill \break
+
+FSDP's \code{FlatParameter} must inter-operate with PyTorch's autograd engine to ensure (1) correct gradient propagation and (2) timely gradient reduction. For (1), recall that the \code{FlatParameter} and its gradient own the underlying storage of the original parameters and their gradients, respectively. To achieve this, before forward computation, FSDP sets the original parameters to be views into their unsharded \code{FlatParameter} using \textit{autograd-visible} \code{torch.split()} and \code{torch.view()} calls. Then, the autograd engine naturally allocates the unsharded \code{FlatParameter} gradient and writes each original parameter's gradient to the appropriate offset as defined by \code{torch.split()}'s backward function. For (2), FSDP registers a gradient hook that only runs once the \code{FlatParameter}'s gradient is finalized. The hook represents the post-backward logic and includes the gradient reduction. Notably, FSDP's approach builds on top of PyTorch's autograd engine instead of hacking around it. As a result, FSDP automatically handles unconventional cases such as when not all parameters are used in the forward or when there are multiple forwards before a backward.
+
+%%%%%%%%%%%%%%
+
+%This section describes FSDP's different variations, termed as \textit{sharding strategies}, and their runtime schedules.
+
+%\subsubsection{Preliminaries}
+%During computation, a parameter must be unsharded, and only outside of computation can it be resharded. To characterize FSDP's runtime schedule, we define per-parameter \code{unshard} and \code{reshard} operations. \code{unshard} involves allocating memory, running all-gather, and switching the parameter from sharded to unsharded data, and \code{reshard} involves switching the parameter from unsharded to sharded data and freeing memory.
+
+%Moreover, for a given training iteration and each parameter we can define \textit{pre/post-forward/backward} to be right before/after the parameter's forward/backward computation, respectively. FSDP may choose to insert its own logic at these four points. For example, gradient reduction happens in the post-backward.
+
+% for the model, we can further define the \textit{prologue} to proceed the entire forward and the \textit{epilogue} to follow the entire backward.
+% To-do: Maybe we do not need to define prologue and epilogue here
+
+%\subsubsection{Sharding Strategy Space}
+%\label{subsubsection:sharding_strategy_space}
+%FSDP offers two main variations on the unshard/reshard schedule for each parameter:
+%\begin{itemize}
+%   \item Reshard after forward: pre-forward \code{unshard}, post-forward \code{reshard}, pre-backward \code{unshard}, post-backward \code{reshard}
+%   \item No reshard after forward: pre-forward \code{unshard}, post-backward \code{reshard}
+%\end{itemize}
+%\todo[inline]{Decide how we want to name/refer to above}
+
+%In other words, with resharding after forward, each parameter is only unsharded for its forward and backward computations and is resharded immediately outside of that. In contrast, without resharding after forward, after a parameter is unsharded during forward, it remains unsharded through the rest of forward and through backward until after its gradient computation. This increases peak memory but saves one all-gather per parameter.
+
+%We define the \textit{sharding factor} to be the number of ranks over which parameters are sharded. In addition to the unshard/reshard schedule, we may additionally parameterize over the sharding factor, allowing it to be any integer factor of the global world size. Together, these define the sharding strategy space through which FSDP offers a unified data parallel solution.
+
+%By setting the sharding factor to one, FSDP simplifies to vanilla data parallelism without sharding and uses all-reduce for gradient reduction. By setting the sharding factor equal to the global world size and resharding after forward, FSDP implements ZeRO-3; by not resharding after forward, FSDP achieves the same model-state peak memory contribution as ZeRO-2~\cite{zero}. These use reduce-scatter for gradient reduction.
+
+%\subsubsection{Hybrid Sharding}
+

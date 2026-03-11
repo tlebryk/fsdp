@@ -1,0 +1,31 @@
+\section{Background}\label{sec:background}
+
+PyTorch~\cite{pytorch:nips:2019} has emerged as a fundamental cornerstone for a plethora of machine learning endeavors. PyTorch stores values in \code{Tensor} objects, which are versatile n-dimensional arrays featuring a rich set of data manipulation operations. Every \code{Tensor} object has an associated storage that is allocated on a specific device. When \code{Tensor}s only represent simple transformations such as \code{reshape} and \code{split}, they can share the same underlying storage.  Each \code{Module} describes a transformation from input to output values, and its behavior during the forward pass is specified by its \code{forward} member function. Such a module may feature \code{Tensor} objects as parameters, with the \code{Linear} module being an example that contains both \code{weight} and \code{bias} parameters. During the forward pass, the \code{Linear} module applies these parameters to the input to produce the output by means of multiplication and addition operations, respectively.
+
+As both the data size and model complexity continue to escalate at a staggering pace, the need for an industry-grade distributed training framework becomes increasingly imperative for applications built on top of PyTorch. This section elucidates the trajectory of PyTorch's distributed training capabilities.
+
+
+
+\subsection{Model Replication}
+
+Model replication approaches are designed to tackle high-volume datasets by scaling out and distributing computations across multiple devices. \code{DistributedDataParallel} (DDP)~\cite{ddp} is the first end-to-end distributed training feature in PyTorch that falls into this category. DDP's adoption has been extensive, spanning both the academic and industrial domains. 
+
+DDP maintains a model replica on each device and synchronizes gradients through collective \code{AllReduce} operations in the backward pass, thereby ensuring model consistency across replicas during training. To expedite training, DDP overlaps gradient communication with backward computation, facilitating concurrent workload executions on diverse resources. However, one conspicuous limitation is that DDP requires all model parameters, gradients, and optimizer states to fit in the memory of one GPU device. Consequently, DDP is inadequate for supporting large models, which are critical for cutting-edge machine learning breakthroughs. For example, when training models with more than one billion parameters using a 40GB GPU device, DDP will likely encounter out-of-memory errors on each device.
+
+
+\subsection{Model Partitioning}
+
+As the size of models grow, they may no longer fit in a single GPU device. In such cases, a viable solution is to partition the model into smaller components and distribute them across multiple devices. Both pipeline parallelism~\cite{gpipe} and Tensor RPC~\cite{rpc} are along this direction. Pipeline parallelism involves breaking a sequence of layers into stages and feeding inputs to different stages in a pipelined fashion to optimize resource utilization. On the other hand, Tensor RPC provides a lower-level toolkit that enables arbitrary computations to be executed on remote devices. While both techniques are capable of scaling large models across multiple devices, they either limit the model to a sequence of stages or require modifications to the model authoring code to insert remote computations, which can pose a significant obstacle to users' adoption. Moreover, many industrial training infrastructures only support the single-program multi-data paradigm, which necessitates a simpler entry point to handle large models.
+
+
+\subsection{Model Sharding}
+
+In addition to partitioning, sharding the parameters of a model can also help reduce its memory footprint and support models with sizes beyond the memory capacity of a single GPU device. After sharding models, each rank only holds a shard of the model parameters, which prevents it from performing the same computations as local training. To guarantee correctness, the training process needs to employ one or both of the following techniques:
+
+\begin{itemize}
+    \item Perform computations with parameter shards and \textbf{communicate activations} accordingly. With this approach, ranks never need to fully materialize any parameter. However, each communication will appear in the critical path as it is inserted between two consecutive and dependent computation operations. As a result, this communication cannot easily overlap with computations, unless non-dependent computations or computations from other iterations can be re-ordered to overlap with communication.
+    \item Perform the same computation as local training by \textbf{communicating parameter} on-demand before computations. Since parameter communications do not have any data dependency on preceding computations, they can overlap with the preceding computations performed in the same forward or backward pass. However, this approach requires that the on-demand communicated parameters could be fully materialized and could fit in the memory of a single GPU device.
+\end{itemize}
+
+FSDP falls into the second category of communicating parameters. Based on our observations and experiments, this approach is sufficient to support the vast majority of large model applications today and in the near future. It is worth noting that if the requirement of fully materializing each parameter unit on GPU becomes a blocker, we can further combine both techniques to support such use cases.
+

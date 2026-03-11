@@ -1,0 +1,8 @@
+\section{Evaluation}\label{sec:evaluation}
+
+We conducted an empirical evaluation of FSDP on large language models and recommendation system models and compared the results with those of DDP. Experiment specifications are described in Section~\ref{sec:exp_setup}. Then, we organize experiments into three categories. Section~\ref{sec:eval_efficiency} focuses on how well FSDP handles different sizes of models. Then, Section~\ref{sec:eval_rate_limiting} discusses the impact of throttling communications. Finally, Section~\ref{sec:eval_prod} demonstrate FSDP's ability to scale to gigantic models. 
+
+\input{text/eval_setup}
+\input{text/eval_efficiency}
+\input{text/eval_rate_limiting}
+\input{text/eval_prod}

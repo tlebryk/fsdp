@@ -1,0 +1,3 @@
+%\subsection{Program Interface}
+
+Users can access FSDP through two APIs, \code{FullyShardedDataParallel} model wrapper and \code{fully\_shard} module annotator. The former wraps the entire model and replaces sub-modules with corresponding FSDP units. In contrast, the latter installs FSDP logic as \code{nn.Module} forward and backward hooks, preserving both model structures and parameter fully-qualified names. 

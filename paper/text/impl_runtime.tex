@@ -1,0 +1,24 @@
+\subsection{Runtime}
+
+FSDP augments a local model instance by incorporating communication operations to reduce gradients and gather parameters. Timely initiation of these operations is of paramount importance for ensuring both correctness and efficiency. Starting communication too soon would cause the parameters or gradients with pending updates to be consumed, while initiating communication too late would result in wasting network bandwidth and delay in subsequent computations.
+
+To insert communication-related code to the model forward pass, the \code{FullyShardedDataParallel} \code{nn.Module} wrapper overrides \code{nn.Module}'s \code{forward()} method to install pre-forward and post-forward logic, whereas the functional \code{fully\_shard} implements them by registering \code{nn.Module} hooks through methods such as \code{register\_forward\_pre\_hook()} and \code{register\_forward\_hook()}. It is more challenging to capture appropriate signals from the backward pass, as PyTorch automatically and transparently handles the backward pass. Fortunately, the autograd engine exposes a variety of hooks that enable the installation of custom logic with precise granularity.
+
+\begin{itemize}
+    \item \textbf{Hooks on \code{Tensor}} through \code{register\_hook()} allows to run custom function when the gradient of a \code{Tensor} is generated. This can help anchor FSDP logic to an activation's gradient computation in the backward pass. FSDP registers this type of hook to the forward output tensor of every FSDP unit to insert communications before backward pass enters that FSDP unit. 
+    \item \textbf{Hooks on \code{backward()}} through \code{queue\_callback()} run right before exiting the current autograd \code{GraphTask}, which is usually the end of overall backward pass. FSDP relies on this hook to wait for pending communications so that the subsequent optimizer step will not consume gradients too early.
+    \item \textbf{Hooks on \code{AccumulateGrad}} autograd function fires when the gradient of a parameter has finished accumulation in the current backward pass. FSDP attaches this type of hook to each \code{FlatParameter}'s \code{AccumulateGrad} function to immediately launch \code{ReduceScatter} when gradients are ready. Note that the \code{Tensor} hook mentioned above can potentially achieve the same behavior, but might incur unnecessary delay as it needs to wait for gradient computations for input activations as well. 
+\end{itemize}
+
+The aforementioned methodologies collectively integrate the FSDP algorithm with the PyTorch \code{nn.Module} and autograd engine in a non-intrusive and efficient manner.
+
+%The runtime implementation mirrors the description from \ref{sec:sharding_strategy}. Each \code{FlatParamHandle} implements \code{unshard} and \code{reshard} operations, and FSDP calls them from pre-forward, post-forward, pre-backward, and post-backward functions.
+
+
+% FSDP implements the pre-backward and post-backward logic as hooks. The pre-backward hook is registered on the output tensors that require gradients from the corresponding module's forward pass and is ensured to only run once per backward. The post-backward hook is registered on 
+
+%\todo[inline]{Discuss backward in context of autograd and hooks}
+%\todo[inline]{Discuss forward as either module override or hooks}
+
+%FSDP implements the pre-backward logic by registering a hook on the corresponding module's forward output tensors that runs before the gradient computation with respect to the tensor, where the hooks are only registered on the tensors that require gradients since their existence implies the need for gradient computation using the module's parameters and hence the need for a pre-backward \code{unshard} operation. FSDP implements the post-backward logic by registering a hook on the \code{FlatParameter}'s \code{AccumulateGrad} object that runs after all corresponding gradients have been computed (as discussed in \ref{subsubsection:autograd}).
+ 

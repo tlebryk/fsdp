@@ -1,0 +1,39 @@
+\section{Implementation}\label{sec:implementation}
+
+This section delves into the intricacies of FSDP implementation, which although do not alter the FSDP core algorithm, are crucial to understand before adopting FSDP. 
+
+\input{text/impl_api}
+\input{text/impl_init}
+\input{text/impl_flat}
+\input{text/impl_runtime}
+\input{text/impl_mixed_precision}
+
+
+
+%\todo[inline]{Execution order}
+
+% To-do: Should we include code snippet showing torch.cat(param.flatten() for param in params, dim=0)?
+
+% To-do: The FlatParameter has unsharded and sharded states.
+
+
+
+
+
+
+%\subsection{\code{FlatParameter} Construction}
+%FSDP offers two ways to construct \code{FlatParameter}s: by manual annotation or programmatically  with a policy.
+
+% To-do: manual wrapping; auto wrapping
+
+
+
+
+
+
+
+
+
+
+
+

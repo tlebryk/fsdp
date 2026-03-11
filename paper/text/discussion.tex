@@ -1,0 +1,38 @@
+\section{Discussion}\label{sec:discussion}
+
+This section discusses how FSDP can be combined with other parallelism paradigms and known limitations when adopting FSDP. 
+
+\subsection{FSDP Interoperability}
+
+Further increasing scalability and efficiency of distributed training requires combining FSDP with other paradigms. This section briefly highlights how the FSDP design enables mixing and matching with other types of parallelisms.
+
+
+\subsubsection{Pipeline Parallelism} \hfill \break
+
+Pipeline parallel can be functionally integrated with FSDP by employing FSDP to wrap each individual pipeline stage. However, as pipeline parallel divides input mini-batches into smaller micro-batches, the default full sharding strategy in FSDP would have to unshard model parameters for every micro-batch. Consequently, combining these approaches with default FSDP configurations may lead to significant communication overhead. Fortunately, FSDP offers alternative sharding strategies that can keep parameters unsharded after the forward pass, avoiding unnecessary \code{AllGather} communications per micro-batch. Admittedly, this requires storing parameters of an entire pipeline stage on the GPU device, but FSDP can still reduce memory usage as it still shards gradients and optimizer states.
+
+\subsubsection{Tensor Parallelism} \hfill \break
+
+In contrast to FSDP, tensor parallel keeps parameters sharded during computation, which is necessary if any sub-module is too large to fit in GPU memory. Presently, PyTorch provides a prototype feature called \code{parallelize\_module} that can be combined with FSDP to construct 2D parallelism. It works by organizing devices into a 2D mesh where PyTorch's distributed tensor \code{DTensor} manages tensor parallelism on one dimension and FSDP applies sharded data parallelism on the other dimension. These two dimensions communicate activations and parameters, respectively. We usually keep the tensor-parallel communications, which block subsequent computation, intra-node to leverage the higher network bandwidth, and allow the FSDP communications operate on the other mesh dimension inter-node.
+
+
+%\todo[inline]{Probably need someone to talk about Micro-batching}
+
+%\subsubsection{3D Parallelism (3DP)}
+%Because FSDP can serve as a drop-in replacement for DDP, FSDP's support for 3D Parallelism in the style of Alpa~\cite{zheng2022alpa} or Megatron~\cite{narayanan2021efficient} that applies intra-host TP, cross-host PP and cross-stage (of pipeline) data parallel is straightforward. By wrapping each pipeline stage, FSDP brings additional memory savings as it removes the memory redundancy across pipelines.
+
+%\subsubsection{Hybrid Parallelism}
+%Special attention must be given to emerging workloads that require different training paradigms for different components. For example, in modern recommendation models~\cite{DLRM,DHEN}, embedding tables are often used at the beginning of each iteration to convert sparse inputs to dense representations. The sheer sizes of the table and their nature of sparse updates make most of them unfit for data parallelism (including FSDP). Thus, state-of-the-art frameworks employ specialized sharding and synchronization algorithms for the embedding architecture to use in conjunction data parallelism for the dense components~\cite{mudigere2021high}. To support this use case, FSDP adopts an ignore-list approach that excludes certain modules from being synchronized and thus leaves the embedding architecture intact. To reduce interference, the communication for the embedding architecture and the collectives used in FSDP can operate in separate device streams.
+
+
+\subsection{Limitations}
+
+During our work with production and research applications, we have encountered certain limitations associated with FSDP. This section aims to discuss two tricky caveats that are not readily apparent and pose significant challenges when it comes to troubleshooting. 
+
+\subsubsection{Mathematical Equivalence} \hfill \break
+
+FSDP cannot ensure that it always achieves the same mathematical equivalence as local training, especially with respect to the optimizer computation. This stems from the fact that the optimizer step operates on the sharded parameters, whose data layout is a function of FSDP's \code{FlatParameter} sharding algorithm that does not respect individual parameter boundaries. As a result, any optimizer computation that depends on an original parameter's unsharded value (\emph{e.g.}~vector norm), its tensor structure (\emph{e.g.}~approximate second-order optimizers), or require global states over all parameters will become invalid. Addressing this requires uneven sharding, padding, or extra communication, all of which hurt performance. Co-designing such optimizer computations with sharding is an open research question.
+
+\subsubsection{Shared Parameters} \hfill \break
+
+For shared parameters, FSDP must ensure to not flatten them into multiple \code{FlatParameter}s and to ensure that they are unsharded properly when needed for all usages. If handled incorrectly, PyTorch may raise an error regarding missing tensor storage or size mismatch, which can happen when an FSDP unit attempts to use a shared parameter that has already been resharded by a preceding FSDP unit. The current recommendation is to construct FSDP units such that the shared parameter belongs to the lowest-common-ancestor unit to ensure that the shared parameter is unsharded throughout all usages. This may require some inspection of the model structure to do correctly and may undesirably keep the \code{FlatParameter} unsharded for a large interval, so we are investigating approaches to improve shared parameter handling.

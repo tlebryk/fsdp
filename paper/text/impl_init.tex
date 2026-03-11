@@ -1,0 +1,25 @@
+\subsection{Initialization}
+
+Section~\ref{sec:full_shard} described FSDP's solution to efficiently initialize large models, which works well when sub-module initializations are self-contained. In a rare situation where one sub-module's initialization depends on a parameter from the different sub-module, the on-demand materialization and record-replay approach might break if the parameter belongs to a different FSDP unit, because the unsharded version of that parameter could have been discarded to reduce memory footprint. Therefore, besides the advanced deferred initialization, FSDP offers two more options:
+
+\begin{itemize}
+    \item \textbf{Initialize unsharded model on GPU}. The memory requirement for model initialization may be smaller than that for training since training also involves gradients, activations, and optimizer states. Consequently, if the training step cannot be performed on a single GPU device, users might still be able to initialize the entire model on a GPU and pass it to FSDP. Then, optimizers should be instantiated after FSDP shards the model, to reduce the memory footprint and align with the sharded gradients produced by FSDP.
+    \item \textbf{Initialize unsharded model on CPU}. If the size of the unsharded model surpasses the capacity of GPU memory and can only be accommodated in CPU memory, it becomes impracticable to move the unsharded model entirely to the GPU before handing it over to FSDP for parameter sharding. To overcome this challenge, FSDP adopts a streaming approach, where the model is migrated to the GPU unit by unit. Upon arrival to the GPU, the parameters of each unit are immediately sharded, which in turn reduces the memory overhead before processing the next unit. This approach remains viable even when there are cross-submodule dependencies during initialization, given that all parameters of the entire unsharded model are present in the CPU memory.
+\end{itemize}
+
+%The goal of FSDP's model initialization is to shard the parameters across ranks, where together they represent the original unsharded parameters. As input, FSDP can take models whose sharded size falls into one of three regimes: (1) fitting in GPU memory, (2) fitting only in CPU memory, and (3) not fitting in CPU memory. For each, FSDP offers a model initialization solution.
+
+%\subsubsection{Fitting in GPU Memory}
+%Even if the model's unsharded size fits in GPU memory, some form of sharding may be necessary for training due to other memory costs such as from gradients, optimizer states, and activations, in which case FSDP is one option. For this regime, the user can simply initialize the unsharded model on CPU, move it to GPU, and pass it to FSDP for parameter sharding.
+
+%\subsubsection{Fitting Only in CPU Memory}
+%If the unsharded model size does not fit in GPU memory and only CPU memory, then the unsharded model cannot be atomically moved to GPU before passing to FSDP for parameter sharding. Instead, FSDP supports a streaming approach, where the model is moved layer by layer to GPU, where each layer's parameters are sharded immediately on GPU, reducing its memory overhead before processing the next layer.
+
+Note that both approaches above are subject to their own limitations. The first method entails the entire model fitting within a single GPU device and thus becomes infeasible for larger models. The second method, on the other hand, can handle larger models since the CPU has considerably larger memory. However, this approach may experience substantial slowdowns in comparison to deferred initialization due to the limited memory bandwidth and parallelization capabilities of the CPU. In light of these observations, users may still prefer deferred initialization, even when dealing with models of the size range encompassed by the previous two methods.
+
+%\subsubsection{Not Fitting in CPU Memory}
+%For models that cannot even fit in CPU memory, FSDP supports \textit{deferred initialization}, where the parameters are not materialized until after sharding. This deferred initialization can offer significant speedups since the work done by the memory-bandwidth-bound tensor fill kernels is partitioned across the workers and happens directly on GPU leveraging its high bandwidth memory without ever running on CPU. Given this, users may prefer deferred initialization even if the model size falls under either of the two preceding regimes.
+
+%\todo[inline]{Andrew: our deferred init not in great shape (parity with unsharded randomness)}
+
+To delimit the scope of each FSDP unit, users may choose to employ the \code{FullyShardedDataParallel} wrapper by intrusively applying it to sub-modules in model source code, or alternatively, provide a custom function to the \code{auto\_wrap\_policy} argument upon instantiation. Selecting the optimal wrapping approach typically requires some experiments and measurements.
