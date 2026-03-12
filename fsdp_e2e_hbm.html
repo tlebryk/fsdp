@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP End-to-End HBM Movement</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #161821;
+    --panel-2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e7e8ec;
+    --muted: #8a8f9f;
+    --muted-2: #616777;
+    --accent: #89a7ff;
+    --persistent: rgba(63, 141, 110, 0.12);
+    --transient: rgba(196, 127, 95, 0.12);
+    --activation: rgba(105, 145, 231, 0.18);
+  }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(105, 145, 231, 0.08), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(212, 120, 92, 0.08), transparent 28%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 18px 48px;
+  }
+
+  h1 {
+    font-size: 1.45rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    margin-bottom: 8px;
+  }
+
+  .subtitle {
+    font-size: 0.9rem;
+    color: var(--muted);
+    text-align: center;
+    max-width: 860px;
+    line-height: 1.45;
+    margin-bottom: 18px;
+  }
+
+  details {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 24px;
+    max-width: 840px;
+    text-align: left;
+    background: rgba(22, 24, 33, 0.7);
+    border: 1px solid rgba(42, 45, 58, 0.8);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+
+  details summary {
+    cursor: pointer;
+    color: var(--muted-2);
+    font-weight: 600;
+  }
+
+  details p {
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+
+  .timeline {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .phase-pill {
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(26, 29, 39, 0.92);
+    color: var(--muted);
+    min-width: 132px;
+    text-align: center;
+    transition: border-color 0.25s, box-shadow 0.25s, color 0.25s, background 0.25s;
+  }
+
+  .phase-pill .phase-name {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+  }
+
+  .phase-pill .phase-step {
+    font-size: 0.78rem;
+  }
+
+  .phase-pill.active {
+    color: var(--text);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(137, 167, 255, 0.25), 0 14px 28px rgba(0, 0, 0, 0.18);
+    background: rgba(26, 29, 39, 1);
+  }
+
+  .phase-pill.done {
+    color: #cbd3ee;
+    border-color: rgba(137, 167, 255, 0.35);
+  }
+
+  #stage {
+    position: relative;
+    width: min(1180px, 100%);
+    display: flex;
+    gap: 30px;
+    justify-content: center;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .rank-card {
+    width: min(560px, 100%);
+    background: rgba(18, 20, 28, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+    position: relative;
+    z-index: 1;
+  }
+
+  .rank-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    gap: 12px;
+  }
+
+  .rank-label {
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .rank-note {
+    font-size: 0.72rem;
+    color: var(--muted-2);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .hbm-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+  }
+
+  .memory-group {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    background: rgba(26, 29, 39, 0.75);
+  }
+
+  .memory-group.persistent { background: linear-gradient(180deg, rgba(63, 141, 110, 0.12), rgba(26, 29, 39, 0.78)); }
+  .memory-group.transient { background: linear-gradient(180deg, rgba(196, 127, 95, 0.12), rgba(26, 29, 39, 0.78)); }
+
+  .group-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: var(--muted);
+  }
+
+  .section {
+    margin-bottom: 18px;
+  }
+
+  .section:last-child { margin-bottom: 0; }
+
+  .section-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+
+  .section-label .capacity {
+    color: var(--muted-2);
+    font-size: 0.65rem;
+    letter-spacing: 0.05em;
+  }
+
+  .buffer {
+    position: relative;
+    min-height: 82px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(15, 17, 23, 0.65);
+    padding: 14px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  }
+
+  .buffer.transient-buffer {
+    border-style: dashed;
+    background: rgba(15, 17, 23, 0.55);
+  }
+
+  .buffer.activation-buffer {
+    background: rgba(105, 145, 231, 0.08);
+  }
+
+  .buffer.highlight {
+    border-color: #b7c9ff;
+    border-width: 2px;
+    background: rgba(28, 34, 54, 0.82);
+    box-shadow:
+      0 0 0 2px rgba(137, 167, 255, 0.34),
+      inset 0 0 0 2px rgba(137, 167, 255, 0.2),
+      0 0 34px rgba(137, 167, 255, 0.28);
+  }
+
+  .slot {
+    width: 58px;
+    height: 46px;
+    border-radius: 10px;
+    border: 1px dashed rgba(90, 95, 110, 0.45);
+    background: rgba(29, 31, 45, 0.55);
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, background 0.25s, transform 0.25s, opacity 0.25s, box-shadow 0.25s;
+  }
+
+  .slot.activation-slot {
+    width: calc(50% - 4px);
+    min-width: 118px;
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .slot.filled {
+    border-style: solid;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .block {
+    width: 100%;
+    height: 100%;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 0.73rem;
+    font-weight: 700;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    transition: transform 0.25s, box-shadow 0.25s, opacity 0.25s, filter 0.25s;
+  }
+
+  .block.small {
+    font-size: 0.64rem;
+    letter-spacing: 0.02em;
+  }
+
+  .block.transient {
+    border-style: dashed;
+    filter: saturate(0.95);
+  }
+
+  .block.activation {
+    background: linear-gradient(135deg, #5d82db, #4767b7);
+  }
+
+  .block.pulse {
+    transform: scale(1.08);
+    box-shadow:
+      0 0 0 3px rgba(183, 201, 255, 0.72),
+      0 0 0 7px rgba(137, 167, 255, 0.24),
+      0 14px 28px rgba(137, 167, 255, 0.32);
+  }
+
+  .block.updated {
+    box-shadow:
+      0 0 0 3px rgba(136, 212, 156, 0.78),
+      0 0 0 7px rgba(136, 212, 156, 0.24),
+      0 0 34px rgba(136, 212, 156, 0.3);
+  }
+
+  .slot.dimmed .block {
+    opacity: 0.24;
+  }
+
+  .floater {
+    position: absolute;
+    width: 58px;
+    height: 46px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 0.73rem;
+    font-weight: 700;
+    color: #fff;
+    pointer-events: none;
+    z-index: 20;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .controls {
+    margin-top: 26px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 0.86rem;
+    font-weight: 600;
+    padding: 10px 22px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  }
+
+  button:hover {
+    background: #23273a;
+    border-color: #3b3f52;
+  }
+
+  button:disabled {
+    opacity: 0.45;
+    cursor: default;
+    transform: none;
+  }
+
+  .status-wrap {
+    margin-top: 18px;
+    width: min(980px, 100%);
+    background: rgba(22, 24, 33, 0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+
+  #status {
+    font-size: 0.92rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  #detail {
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  .compute-cue {
+    margin-top: 10px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    min-height: 28px;
+  }
+
+  .compute-cue.hidden {
+    display: none;
+  }
+
+  .cue-chip {
+    font-size: 0.72rem;
+    line-height: 1;
+    padding: 7px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(29, 31, 45, 0.7);
+    color: #d7dcef;
+    white-space: nowrap;
+  }
+
+  .cue-chip.arrow {
+    padding: 7px 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted-2);
+  }
+
+  .cue-chip.source {
+    background: rgba(88, 111, 173, 0.18);
+  }
+
+  .cue-chip.result {
+    background: rgba(78, 143, 113, 0.18);
+  }
+
+  .legend {
+    margin-top: 20px;
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 0.76rem;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .legend-swatch {
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  @media (max-width: 980px) {
+    .hbm-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 620px) {
+    body { padding: 26px 12px 36px; }
+    .slot { width: 52px; }
+    .floater { width: 52px; }
+    .slot.activation-slot {
+      width: 100%;
+      min-width: 0;
+      flex-basis: 100%;
+    }
+  }
+</style>
+</head>
+<body>
+
+<h1>FSDP End-to-End HBM Movement</h1>
+<div class="subtitle">
+  Two ranks, two FSDP units, and one fixed HBM layout per rank. The animation tracks what stays resident,
+  what is materialized transiently, and when gradients and optimizer state are used.
+</div>
+
+<details>
+  <summary>What this view is showing</summary>
+  <p>
+    Persistent regions keep parameter shards and optimizer state resident for the whole iteration. The transient
+    side shows the all-gathered full parameters, saved activations from forward, and the transient full gradients
+    created during backward before reduce-scatter returns each rank to only its gradient shard.
+  </p>
+</details>
+
+<div class="timeline">
+  <div class="phase-pill" id="phase-forward">
+    <span class="phase-name">Forward</span>
+    <span class="phase-step" id="phase-forward-step">Awaiting U1</span>
+  </div>
+  <div class="phase-pill" id="phase-backward">
+    <span class="phase-name">Backward</span>
+    <span class="phase-step" id="phase-backward-step">Waiting</span>
+  </div>
+  <div class="phase-pill" id="phase-optimizer">
+    <span class="phase-name">Optimizer</span>
+    <span class="phase-step" id="phase-optimizer-step">Waiting</span>
+  </div>
+</div>
+
+<div id="stage"></div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+  <button id="btn-mode">Mode: sequential</button>
+</div>
+
+<div class="status-wrap">
+  <div id="status">Ready</div>
+  <div id="detail">Persistent parameter shards and optimizer state are resident on both ranks. Step through to materialize unit weights into the transient model buffer.</div>
+  <div id="compute-cue" class="compute-cue hidden"></div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<script>
+const CONFIG = {
+  ranks: [0, 1],
+  units: [
+    {
+      id: "u1",
+      label: "U1",
+      activationLabel: "act U1",
+      color: {
+        bg: "linear-gradient(135deg, #34b3a4, #2a8f83)",
+        solid: "#2f9d90",
+        glow: "rgba(47,157,144,0.36)",
+        soft: "rgba(47,157,144,0.14)",
+      },
+      params: [
+        { id: "p0", label: "p0", rank: 0 },
+        { id: "p1", label: "p1", rank: 1 },
+      ],
+    },
+    {
+      id: "u2",
+      label: "U2",
+      activationLabel: "act U2",
+      color: {
+        bg: "linear-gradient(135deg, #d4785c, #b8604a)",
+        solid: "#c96f4f",
+        glow: "rgba(201,111,79,0.34)",
+        soft: "rgba(201,111,79,0.14)",
+      },
+      params: [
+        { id: "p2", label: "p2", rank: 0 },
+        { id: "p3", label: "p3", rank: 0 },
+        { id: "p4", label: "p4", rank: 1 },
+        { id: "p5", label: "p5", rank: 1 },
+      ],
+    },
+  ],
+  activationColor: {
+    bg: "linear-gradient(135deg, #5d82db, #4767b7)",
+    solid: "#5678cc",
+    glow: "rgba(93,130,219,0.3)",
+  },
+  gradAccent: {
+    bg: "linear-gradient(135deg, #7b86a8, #646e91)",
+    solid: "#6f7a9d",
+    glow: "rgba(111,122,157,0.24)",
+  },
+};
+
+const maxUnitSize = Math.max(...CONFIG.units.map(unit => unit.params.length));
+const paramsByRank = {};
+CONFIG.ranks.forEach(rank => {
+  paramsByRank[rank] = CONFIG.units.flatMap(unit =>
+    unit.params.filter(param => param.rank === rank).map(param => ({ ...param, unitId: unit.id }))
+  );
+});
+
+const stage = document.getElementById("stage");
+const statusEl = document.getElementById("status");
+const detailEl = document.getElementById("detail");
+const computeCueEl = document.getElementById("compute-cue");
+const legendEl = document.getElementById("legend");
+
+const paramSlotEls = {};
+const paramBlockEls = {};
+const paramBuffers = {};
+const modelSlots = {};
+const modelBuffers = {};
+const activationSlots = {};
+const activationBuffers = {};
+const fullGradSlots = {};
+const fullGradBuffers = {};
+const gradSlots = {};
+const gradBuffers = {};
+const optSlotEls = {};
+const optBlockEls = {};
+const optBuffers = {};
+const phaseEls = {
+  forward: document.getElementById("phase-forward"),
+  backward: document.getElementById("phase-backward"),
+  optimizer: document.getElementById("phase-optimizer"),
+};
+const phaseTextEls = {
+  forward: document.getElementById("phase-forward-step"),
+  backward: document.getElementById("phase-backward-step"),
+  optimizer: document.getElementById("phase-optimizer-step"),
+};
+
+const DUR = {
+  fly: 850,
+  short: 220,
+  medium: 420,
+};
+
+let currentStep = 0;
+let animating = false;
+let mode = "sequential";
+let renderMode = "animate";
+let skipRequestedStep = false;
+
+function buildLegend() {
+  legendEl.innerHTML = `
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[0].color.solid}"></div>${CONFIG.units[0].label} parameter family</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[1].color.solid}"></div>${CONFIG.units[1].label} parameter family</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.activationColor.solid}"></div>saved activations</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.gradAccent.solid}"></div>transient/full gradient indicator</div>
+  `;
+}
+
+function createSection(title, capacity, bufferClass = "", slotFactory) {
+  const section = document.createElement("div");
+  section.className = "section";
+
+  const label = document.createElement("div");
+  label.className = "section-label";
+  label.innerHTML = `<span>${title}</span><span class="capacity">${capacity}</span>`;
+  section.appendChild(label);
+
+  const buffer = document.createElement("div");
+  buffer.className = `buffer ${bufferClass}`.trim();
+  section.appendChild(buffer);
+
+  slotFactory(buffer);
+  return { section, buffer };
+}
+
+function createSlot(slotClass = "") {
+  const slot = document.createElement("div");
+  slot.className = `slot ${slotClass}`.trim();
+  return slot;
+}
+
+function appendBlock(slot, label, style, extraClass = "") {
+  slot.innerHTML = "";
+  slot.classList.add("filled");
+  const block = document.createElement("div");
+  block.className = `block ${extraClass}`.trim();
+  block.textContent = label;
+  block.style.background = style.bg;
+  slot.appendChild(block);
+  return block;
+}
+
+function buildDOM() {
+  stage.innerHTML = "";
+
+  CONFIG.ranks.forEach(rank => {
+    const card = document.createElement("div");
+    card.className = "rank-card";
+
+    const header = document.createElement("div");
+    header.className = "rank-header";
+    header.innerHTML = `<div class="rank-label">Rank ${rank}</div><div class="rank-note">HBM view</div>`;
+    card.appendChild(header);
+
+    const grid = document.createElement("div");
+    grid.className = "hbm-grid";
+
+    const persistent = document.createElement("div");
+    persistent.className = "memory-group persistent";
+    persistent.innerHTML = `<div class="group-title">Persistent Region</div>`;
+
+    const transient = document.createElement("div");
+    transient.className = "memory-group transient";
+    transient.innerHTML = `<div class="group-title">Transient Region</div>`;
+
+    const shardSection = createSection("Parameter Shards", `${paramsByRank[rank].length} resident`, "", buffer => {
+      paramsByRank[rank].forEach(param => {
+        const slot = createSlot();
+        const unit = CONFIG.units.find(u => u.id === param.unitId);
+        const block = appendBlock(slot, param.label, unit.color);
+        buffer.appendChild(slot);
+        paramSlotEls[param.id] = slot;
+        paramBlockEls[param.id] = block;
+      });
+      paramBuffers[rank] = buffer;
+    });
+    persistent.appendChild(shardSection.section);
+
+    const gradSection = createSection("Gradient Shards", `${paramsByRank[rank].length} after reduce-scatter`, "", buffer => {
+      paramsByRank[rank].forEach(param => {
+        const slot = createSlot();
+        buffer.appendChild(slot);
+        gradSlots[param.id] = slot;
+      });
+      gradBuffers[rank] = buffer;
+    });
+    persistent.appendChild(gradSection.section);
+
+    const optSection = createSection("Optimizer State", `${paramsByRank[rank].length} resident`, "", buffer => {
+      paramsByRank[rank].forEach(param => {
+        const slot = createSlot();
+        const unit = CONFIG.units.find(u => u.id === param.unitId);
+        const block = appendBlock(slot, `opt ${param.label}`, { bg: unit.color.bg });
+        block.classList.add("small");
+        buffer.appendChild(slot);
+        optSlotEls[param.id] = slot;
+        optBlockEls[param.id] = block;
+      });
+      optBuffers[rank] = buffer;
+    });
+    persistent.appendChild(optSection.section);
+
+    const modelSection = createSection("Model Buffer", `${maxUnitSize} transient`, "transient-buffer", buffer => {
+      modelSlots[rank] = [];
+      for (let i = 0; i < maxUnitSize; i++) {
+        const slot = createSlot();
+        buffer.appendChild(slot);
+        modelSlots[rank].push(slot);
+      }
+      modelBuffers[rank] = buffer;
+    });
+    transient.appendChild(modelSection.section);
+
+    const activationSection = createSection("Saved Activations", `${CONFIG.units.length} forward leftovers`, "activation-buffer", buffer => {
+      activationSlots[rank] = {};
+      CONFIG.units.forEach(unit => {
+        const slot = createSlot("activation-slot");
+        buffer.appendChild(slot);
+        activationSlots[rank][unit.id] = slot;
+      });
+      activationBuffers[rank] = buffer;
+    });
+    transient.appendChild(activationSection.section);
+
+    const fullGradSection = createSection("Full Grad Buffer", `${maxUnitSize} transient`, "transient-buffer", buffer => {
+      fullGradSlots[rank] = [];
+      for (let i = 0; i < maxUnitSize; i++) {
+        const slot = createSlot();
+        buffer.appendChild(slot);
+        fullGradSlots[rank].push(slot);
+      }
+      fullGradBuffers[rank] = buffer;
+    });
+    transient.appendChild(fullGradSection.section);
+
+    grid.appendChild(persistent);
+    grid.appendChild(transient);
+    card.appendChild(grid);
+    stage.appendChild(card);
+  });
+
+  buildLegend();
+}
+
+function sleep(ms) {
+  if (renderMode === "instant" || skipRequestedStep) return Promise.resolve();
+  return new Promise(resolve => scheduleSkippable(resolve, ms));
+}
+
+function getPos(el) {
+  const sr = stage.getBoundingClientRect();
+  const rect = el.getBoundingClientRect();
+  return {
+    x: rect.left - sr.left,
+    y: rect.top - sr.top,
+  };
+}
+
+function scheduleSkippable(callback, ms) {
+  let done = false;
+  let timerId = null;
+
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (timerId !== null) clearTimeout(timerId);
+    callback();
+  };
+
+  timerId = window.setTimeout(finish, ms);
+
+  const watchSkip = () => {
+    if (done) return;
+    if (skipRequestedStep || renderMode === "instant") {
+      finish();
+      return;
+    }
+    requestAnimationFrame(watchSkip);
+  };
+  requestAnimationFrame(watchSkip);
+}
+
+function setPhaseState(activePhase, stepText) {
+  const forwardDone = activePhase === "backward" || activePhase === "optimizer";
+  const backwardDone = activePhase === "optimizer";
+  Object.entries(phaseEls).forEach(([phase, el]) => {
+    el.classList.toggle("active", phase === activePhase);
+    el.classList.toggle("done", (phase === "forward" && forwardDone) || (phase === "backward" && backwardDone));
+  });
+  if (stepText.forward) phaseTextEls.forward.textContent = stepText.forward;
+  if (stepText.backward) phaseTextEls.backward.textContent = stepText.backward;
+  if (stepText.optimizer) phaseTextEls.optimizer.textContent = stepText.optimizer;
+}
+
+function setStatus(title, detail) {
+  statusEl.textContent = `${currentStep + 1}/${STEPS.length}  ${title}`;
+  detailEl.textContent = detail;
+}
+
+function setComputeCue(parts = []) {
+  computeCueEl.innerHTML = "";
+  if (!parts.length) {
+    computeCueEl.classList.add("hidden");
+    return;
+  }
+  computeCueEl.classList.remove("hidden");
+  parts.forEach(part => {
+    const chip = document.createElement("div");
+    const type = part.type || "source";
+    chip.className = `cue-chip ${type}`;
+    chip.textContent = part.label;
+    computeCueEl.appendChild(chip);
+  });
+}
+
+function highlightBuffers(buffers) {
+  buffers.forEach(buffer => buffer.classList.add("highlight"));
+}
+
+function clearHighlights() {
+  setComputeCue([]);
+  document.querySelectorAll(".buffer.highlight").forEach(buffer => buffer.classList.remove("highlight"));
+  document.querySelectorAll(".block.pulse").forEach(block => block.classList.remove("pulse"));
+  document.querySelectorAll(".block.updated").forEach(block => block.classList.remove("updated"));
+  document.querySelectorAll(".slot.dimmed").forEach(slot => slot.classList.remove("dimmed"));
+}
+
+function clearSlot(slot) {
+  slot.innerHTML = "";
+  slot.classList.remove("filled", "dimmed");
+}
+
+function clearSlots(slotList) {
+  slotList.forEach(clearSlot);
+}
+
+function setBlockLabel(block, text) {
+  if (block) block.textContent = text;
+}
+
+function resetPersistentLabels() {
+  Object.entries(paramBlockEls).forEach(([paramId, block]) => {
+    const { param } = getParamMeta(paramId);
+    setBlockLabel(block, param.label);
+  });
+  Object.entries(optBlockEls).forEach(([paramId, block]) => {
+    const { param } = getParamMeta(paramId);
+    setBlockLabel(block, `opt ${param.label}`);
+  });
+}
+
+function fillParamSlot(slot, param, extraClass = "") {
+  const unit = CONFIG.units.find(u => u.params.some(candidate => candidate.id === param.id));
+  return appendBlock(slot, param.label, unit.color, extraClass);
+}
+
+function fillGradSlot(slot, param, full = false) {
+  const unit = CONFIG.units.find(u => u.params.some(candidate => candidate.id === param.id));
+  const label = full ? `∇${param.label}` : `∇${param.label}`;
+  const block = appendBlock(slot, label, unit.color, full ? "transient" : "");
+  if (full) block.classList.add("small");
+  return block;
+}
+
+function fillActivationSlot(slot, unit) {
+  return appendBlock(slot, unit.activationLabel, CONFIG.activationColor, "activation small");
+}
+
+function createFloaterFromBlock(text, bg, srcEl, transient = false) {
+  const floater = document.createElement("div");
+  floater.className = "floater";
+  floater.textContent = text;
+  floater.style.background = bg;
+  if (transient) floater.style.borderStyle = "dashed";
+  const pos = getPos(srcEl);
+  floater.style.left = `${pos.x}px`;
+  floater.style.top = `${pos.y}px`;
+  stage.appendChild(floater);
+  return floater;
+}
+
+function flyElement(srcEl, dstEl, text, bg, { transient = false, dimSource = false, onArrive = null } = {}) {
+  return new Promise(resolve => {
+    if (dimSource) srcEl.classList.add("dimmed");
+    if (renderMode === "instant" || skipRequestedStep) {
+      if (onArrive) onArrive();
+      resolve();
+      return;
+    }
+    const floater = createFloaterFromBlock(text, bg, srcEl, transient);
+    const dstPos = getPos(dstEl);
+    floater.style.transition = `left ${DUR.fly}ms cubic-bezier(0.25,0.8,0.25,1), top ${DUR.fly}ms cubic-bezier(0.25,0.8,0.25,1), opacity 150ms ease`;
+    floater.style.opacity = "0";
+    requestAnimationFrame(() => {
+      floater.style.opacity = "1";
+      requestAnimationFrame(() => {
+        floater.style.left = `${dstPos.x}px`;
+        floater.style.top = `${dstPos.y}px`;
+      });
+    });
+    scheduleSkippable(() => {
+      if (onArrive) onArrive();
+      floater.remove();
+      resolve();
+    }, DUR.fly + 50);
+  });
+}
+
+function pulseBlocks(blocks) {
+  blocks.filter(Boolean).forEach(block => block.classList.add("pulse"));
+}
+
+function getUnitForParam(paramId) {
+  return CONFIG.units.find(unit => unit.params.some(param => param.id === paramId));
+}
+
+function getParamMeta(paramId) {
+  for (const unit of CONFIG.units) {
+    const match = unit.params.find(param => param.id === paramId);
+    if (match) return { param: match, unit };
+  }
+  return null;
+}
+
+async function animateGather(unit) {
+  clearHighlights();
+  CONFIG.ranks.forEach(rank => clearSlots(modelSlots[rank]));
+  highlightBuffers(CONFIG.ranks.map(rank => modelBuffers[rank]));
+  pulseBlocks(unit.params.map(param => paramBlockEls[param.id]));
+
+  const tasks = [];
+  const runFlight = async param => {
+    const srcSlot = paramSlotEls[param.id];
+    for (const rank of CONFIG.ranks) {
+      const dstSlot = modelSlots[rank][unit.params.findIndex(candidate => candidate.id === param.id)];
+      await flyElement(srcSlot, dstSlot, param.label, unit.color.bg, {
+        onArrive: () => fillParamSlot(dstSlot, param, "transient"),
+      });
+    }
+  };
+
+  if (mode === "sequential") {
+    for (const param of unit.params) {
+      await runFlight(param);
+    }
+  } else {
+    unit.params.forEach(param => {
+      CONFIG.ranks.forEach(rank => {
+        const dstSlot = modelSlots[rank][unit.params.findIndex(candidate => candidate.id === param.id)];
+        tasks.push(flyElement(paramSlotEls[param.id], dstSlot, param.label, unit.color.bg, {
+          onArrive: () => fillParamSlot(dstSlot, param, "transient"),
+        }));
+      });
+    });
+    await Promise.all(tasks);
+  }
+}
+
+async function animateForwardCompute(unit) {
+  clearHighlights();
+  highlightBuffers(CONFIG.ranks.map(rank => modelBuffers[rank]).concat(CONFIG.ranks.map(rank => activationBuffers[rank])));
+  const modelBlocks = CONFIG.ranks.flatMap(rank =>
+    unit.params.map((_, index) => modelSlots[rank][index].querySelector(".block"))
+  );
+  pulseBlocks(modelBlocks);
+  await sleep(DUR.medium);
+  CONFIG.ranks.forEach(rank => fillActivationSlot(activationSlots[rank][unit.id], unit));
+  pulseBlocks(CONFIG.ranks.map(rank => activationSlots[rank][unit.id].querySelector(".block")));
+  await sleep(DUR.short);
+}
+
+async function animateReshardAfterForward(unit) {
+  clearHighlights();
+  highlightBuffers(CONFIG.ranks.map(rank => modelBuffers[rank]));
+  CONFIG.ranks.forEach(rank => {
+    unit.params.forEach((_, index) => modelSlots[rank][index].classList.add("dimmed"));
+  });
+  await sleep(DUR.medium);
+  CONFIG.ranks.forEach(rank => clearSlots(modelSlots[rank]));
+}
+
+async function animateBackwardCompute(unit) {
+  clearHighlights();
+  CONFIG.ranks.forEach(rank => clearSlots(fullGradSlots[rank]));
+  highlightBuffers(
+    CONFIG.ranks.map(rank => modelBuffers[rank])
+      .concat(CONFIG.ranks.map(rank => activationBuffers[rank]))
+      .concat(CONFIG.ranks.map(rank => fullGradBuffers[rank]))
+  );
+
+  const inputBlocks = CONFIG.ranks.flatMap(rank => {
+    const blocks = [activationSlots[rank][unit.id].querySelector(".block")];
+    unit.params.forEach((_, index) => blocks.push(modelSlots[rank][index].querySelector(".block")));
+    return blocks;
+  });
+  setComputeCue([
+    { label: "full params", type: "source" },
+    { label: "+", type: "arrow" },
+    { label: "saved activations", type: "source" },
+    { label: "->", type: "arrow" },
+    { label: "full grads", type: "result" },
+  ]);
+  pulseBlocks(inputBlocks);
+  await sleep(DUR.medium);
+
+  CONFIG.ranks.forEach(rank => {
+    unit.params.forEach((param, index) => {
+      fillGradSlot(fullGradSlots[rank][index], param, true);
+    });
+  });
+  pulseBlocks(CONFIG.ranks.flatMap(rank =>
+    unit.params.map((_, index) => fullGradSlots[rank][index].querySelector(".block"))
+  ));
+  await sleep(DUR.short);
+}
+
+async function animateReduceScatter(unit) {
+  clearHighlights();
+  highlightBuffers(CONFIG.ranks.map(rank => fullGradBuffers[rank]).concat(CONFIG.ranks.map(rank => gradBuffers[rank])));
+
+  const getDestSlot = paramId => gradSlots[paramId];
+
+  if (mode === "sequential") {
+    for (const param of unit.params) {
+      const flights = CONFIG.ranks.map(rank =>
+        flyElement(
+          fullGradSlots[rank][unit.params.findIndex(candidate => candidate.id === param.id)],
+          getDestSlot(param.id),
+          `∇${param.label}`,
+          getUnitForParam(param.id).color.bg,
+          {
+            transient: true,
+            dimSource: true,
+            onArrive: () => fillGradSlot(getDestSlot(param.id), param, false),
+          }
+        )
+      );
+      await Promise.all(flights);
+    }
+  } else {
+    const tasks = [];
+    unit.params.forEach(param => {
+      CONFIG.ranks.forEach(rank => {
+        tasks.push(
+          flyElement(
+            fullGradSlots[rank][unit.params.findIndex(candidate => candidate.id === param.id)],
+            getDestSlot(param.id),
+            `∇${param.label}`,
+            getUnitForParam(param.id).color.bg,
+            {
+              transient: true,
+              dimSource: true,
+              onArrive: () => fillGradSlot(getDestSlot(param.id), param, false),
+            }
+          )
+        );
+      });
+    });
+    await Promise.all(tasks);
+  }
+
+  await sleep(DUR.short);
+  CONFIG.ranks.forEach(rank => {
+    clearSlots(fullGradSlots[rank]);
+    clearSlots(modelSlots[rank]);
+    clearSlot(activationSlots[rank][unit.id]);
+  });
+}
+
+async function animateOptimizerParamStep() {
+  clearHighlights();
+  const liveGradIds = Object.entries(gradSlots)
+    .filter(([, slot]) => slot.classList.contains("filled"))
+    .map(([paramId]) => paramId);
+
+  const buffersToHighlight = [];
+  CONFIG.ranks.forEach(rank => {
+    buffersToHighlight.push(gradBuffers[rank]);
+    buffersToHighlight.push(paramBuffers[rank]);
+    buffersToHighlight.push(optBuffers[rank]);
+  });
+  highlightBuffers(buffersToHighlight);
+  setComputeCue([
+    { label: "grad shard", type: "source" },
+    { label: "+", type: "arrow" },
+    { label: "optimizer state", type: "source" },
+    { label: "->", type: "arrow" },
+    { label: "updated param shard", type: "result" },
+  ]);
+
+  if (mode === "sequential") {
+    for (const paramId of liveGradIds) {
+      const { param, unit } = getParamMeta(paramId);
+      const gradSlot = gradSlots[paramId];
+      const paramSlot = paramSlotEls[paramId];
+      optBlockEls[paramId].classList.add("pulse");
+      await flyElement(gradSlot, paramSlot, `upd ${param.label}`, unit.color.bg, {
+        transient: true,
+        dimSource: true,
+        onArrive: () => {
+          setBlockLabel(paramBlockEls[paramId], `${param.label}'`);
+          paramBlockEls[paramId].classList.add("updated");
+        },
+      });
+      await sleep(120);
+    }
+  } else {
+    const tasks = [];
+    liveGradIds.forEach(paramId => {
+      const { param, unit } = getParamMeta(paramId);
+      optBlockEls[paramId].classList.add("pulse");
+      tasks.push(flyElement(gradSlots[paramId], paramSlotEls[paramId], `upd ${param.label}`, unit.color.bg, {
+        transient: true,
+        dimSource: true,
+        onArrive: () => {
+          setBlockLabel(paramBlockEls[paramId], `${param.label}'`);
+          paramBlockEls[paramId].classList.add("updated");
+        },
+      }));
+    });
+    await Promise.all(tasks);
+  }
+
+  await sleep(DUR.medium);
+}
+
+async function animateOptimizerStateStep() {
+  clearHighlights();
+  const liveGradIds = Object.entries(gradSlots)
+    .filter(([, slot]) => slot.classList.contains("filled"))
+    .map(([paramId]) => paramId);
+
+  const buffersToHighlight = [];
+  CONFIG.ranks.forEach(rank => {
+    buffersToHighlight.push(gradBuffers[rank]);
+    buffersToHighlight.push(optBuffers[rank]);
+  });
+  highlightBuffers(buffersToHighlight);
+  setComputeCue([
+    { label: "grad shard", type: "source" },
+    { label: "+", type: "arrow" },
+    { label: "old optimizer state", type: "source" },
+    { label: "->", type: "arrow" },
+    { label: "updated optimizer state", type: "result" },
+  ]);
+
+  const flashOptState = paramId => {
+    const { param } = getParamMeta(paramId);
+    setBlockLabel(optBlockEls[paramId], `opt ${param.label}'`);
+    optBlockEls[paramId].classList.add("updated", "pulse");
+    gradSlots[paramId].classList.add("dimmed");
+  };
+
+  if (mode === "sequential") {
+    for (const paramId of liveGradIds) {
+      flashOptState(paramId);
+      await sleep(160);
+    }
+  } else {
+    liveGradIds.forEach(flashOptState);
+    await sleep(DUR.short);
+  }
+
+  await sleep(DUR.medium);
+  liveGradIds.forEach(paramId => clearSlot(gradSlots[paramId]));
+}
+
+function resetMemoryState() {
+  clearHighlights();
+  resetPersistentLabels();
+  CONFIG.ranks.forEach(rank => {
+    clearSlots(modelSlots[rank]);
+    clearSlots(fullGradSlots[rank]);
+    CONFIG.units.forEach(unit => clearSlot(activationSlots[rank][unit.id]));
+  });
+  Object.values(gradSlots).forEach(clearSlot);
+  phaseEls.forward.classList.remove("active", "done");
+  phaseEls.backward.classList.remove("active", "done");
+  phaseEls.optimizer.classList.remove("active", "done");
+  phaseTextEls.forward.textContent = "Awaiting U1";
+  phaseTextEls.backward.textContent = "Waiting";
+  phaseTextEls.optimizer.textContent = "Waiting";
+}
+
+const STEPS = [
+  {
+    title: "Forward: all-gather U1",
+    detail: "Each rank materializes the full U1 weights in the transient model buffer while parameter shards remain resident.",
+    before: () => setPhaseState("forward", { forward: "U1 all-gather", backward: "Waiting", optimizer: "Waiting" }),
+    run: () => animateGather(CONFIG.units[0]),
+  },
+  {
+    title: "Forward: compute U1",
+    detail: "Forward compute for U1 runs using the materialized weights. Activations for U1 are retained in HBM for backward.",
+    before: () => setPhaseState("forward", { forward: "U1 compute", backward: "Waiting", optimizer: "Waiting" }),
+    run: () => animateForwardCompute(CONFIG.units[0]),
+  },
+  {
+    title: "Forward: reshard U1",
+    detail: "The full U1 weights are freed from the transient model buffer. Only the original shards and saved activations remain.",
+    before: () => setPhaseState("forward", { forward: "U1 free full params", backward: "Waiting", optimizer: "Waiting" }),
+    run: () => animateReshardAfterForward(CONFIG.units[0]),
+  },
+  {
+    title: "Forward: all-gather U2",
+    detail: "The same pattern repeats for U2. The transient model buffer now expands to the larger 4-parameter unit.",
+    before: () => setPhaseState("forward", { forward: "U2 all-gather", backward: "Waiting", optimizer: "Waiting" }),
+    run: () => animateGather(CONFIG.units[1]),
+  },
+  {
+    title: "Forward: compute U2",
+    detail: "U2 forward runs, and its activations are saved alongside U1's activations in HBM.",
+    before: () => setPhaseState("forward", { forward: "U2 compute", backward: "Waiting", optimizer: "Waiting" }),
+    run: () => animateForwardCompute(CONFIG.units[1]),
+  },
+  {
+    title: "Forward: reshard U2",
+    detail: "The materialized U2 weights are released. Forward is complete, so HBM now holds shards, optimizer state, and activations for U1 and U2.",
+    before: () => setPhaseState("forward", { forward: "Forward done", backward: "U2 next", optimizer: "Waiting" }),
+    run: () => animateReshardAfterForward(CONFIG.units[1]),
+  },
+  {
+    title: "Backward: all-gather U2",
+    detail: "Backward starts from U2. The full U2 weights are materialized again because backward needs the weights as well as saved activations.",
+    before: () => setPhaseState("backward", { forward: "Done", backward: "U2 all-gather", optimizer: "Waiting" }),
+    run: () => animateGather(CONFIG.units[1]),
+  },
+  {
+    title: "Backward: create full grads for U2",
+    detail: "Autograd consumes the saved U2 activations and rematerialized weights, producing transient full gradients that match the full U2 parameter size.",
+    before: () => setPhaseState("backward", { forward: "Done", backward: "U2 full grads", optimizer: "Waiting" }),
+    run: () => animateBackwardCompute(CONFIG.units[1]),
+  },
+  {
+    title: "Backward: reduce-scatter U2",
+    detail: "Reduce-scatter sums gradients across ranks and returns each rank to only its U2 gradient shard. The full U2 weights, full U2 grads, and U2 activations are then freed.",
+    before: () => setPhaseState("backward", { forward: "Done", backward: "U2 grad shards", optimizer: "Waiting" }),
+    run: () => animateReduceScatter(CONFIG.units[1]),
+  },
+  {
+    title: "Backward: all-gather U1",
+    detail: "The backward walk continues to U1. Its full weights are materialized again while U2 gradient shards stay resident.",
+    before: () => setPhaseState("backward", { forward: "Done", backward: "U1 all-gather", optimizer: "Waiting" }),
+    run: () => animateGather(CONFIG.units[0]),
+  },
+  {
+    title: "Backward: create full grads for U1",
+    detail: "Autograd now uses the saved U1 activations plus upstream gradients to create the transient full U1 gradient tensor.",
+    before: () => setPhaseState("backward", { forward: "Done", backward: "U1 full grads", optimizer: "Waiting" }),
+    run: () => animateBackwardCompute(CONFIG.units[0]),
+  },
+  {
+    title: "Backward: reduce-scatter U1",
+    detail: "U1 gradients are reduced and sharded. After this, each rank holds parameter shards, optimizer state, and gradient shards for both units.",
+    before: () => setPhaseState("backward", { forward: "Done", backward: "Backward done", optimizer: "Ready" }),
+    run: () => animateReduceScatter(CONFIG.units[0]),
+  },
+  {
+    title: "Optimizer: update parameter shards",
+    detail: "First, the optimizer uses each local gradient shard together with local optimizer state to update the parameter shard in place. Parameter shards switch to primed labels here.",
+    before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "Update params" }),
+    run: () => animateOptimizerParamStep(),
+  },
+  {
+    title: "Optimizer: update optimizer state",
+    detail: "Next, the optimizer state itself advances using the same local gradient shard. Optimizer-state labels switch to primed labels here, and the gradient shards are then cleared.",
+    before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "Update state" }),
+    run: () => animateOptimizerStateStep(),
+  },
+];
+
+async function executeStep(index) {
+  const step = STEPS[index];
+  skipRequestedStep = false;
+  step.before();
+  setStatus(step.title, step.detail);
+  await step.run();
+  skipRequestedStep = false;
+  if (renderMode === "instant") clearHighlights();
+}
+
+async function playAll() {
+  if (animating) {
+    skipRequestedStep = true;
+    return;
+  }
+  animating = true;
+  refreshControls();
+  if (currentStep >= STEPS.length) {
+    currentStep = 0;
+    resetMemoryState();
+  }
+  while (currentStep < STEPS.length) {
+    await executeStep(currentStep);
+    currentStep += 1;
+    if (currentStep < STEPS.length) await sleep(DUR.medium);
+  }
+  statusEl.textContent = "Done";
+  detailEl.textContent = "The iteration finished with updated parameter shards and updated optimizer state shown as primed labels. Gradient shards have been consumed and cleared.";
+  setComputeCue([]);
+  animating = false;
+  refreshControls();
+}
+
+async function stepOnce() {
+  if (animating) {
+    skipRequestedStep = true;
+    return;
+  }
+  if (currentStep >= STEPS.length) {
+    reset();
+    return;
+  }
+  animating = true;
+  refreshControls();
+  await executeStep(currentStep);
+  currentStep += 1;
+  animating = false;
+  refreshControls();
+}
+
+async function stepPrev() {
+  if (animating) return;
+  if (currentStep <= 0) {
+    reset();
+    return;
+  }
+  animating = true;
+  refreshControls();
+  const targetStep = currentStep - 2;
+  const previousRenderMode = renderMode;
+  renderMode = "instant";
+  resetMemoryState();
+  currentStep = 0;
+  for (let i = 0; i <= targetStep; i++) {
+    await executeStep(i);
+    currentStep = i + 1;
+  }
+  if (targetStep < 0) {
+    statusEl.textContent = "Ready";
+    detailEl.textContent = "Persistent parameter shards and optimizer state are resident on both ranks. Step through to materialize unit weights into the transient model buffer.";
+  }
+  renderMode = previousRenderMode;
+  animating = false;
+  refreshControls();
+}
+
+function refreshControls() {
+  document.getElementById("btn-play").disabled = false;
+  document.getElementById("btn-step").disabled = false;
+  document.getElementById("btn-prev").disabled = animating || currentStep === 0;
+}
+
+function reset() {
+  if (animating) return;
+  currentStep = 0;
+  resetMemoryState();
+  statusEl.textContent = "Ready";
+  detailEl.textContent = "Persistent parameter shards and optimizer state are resident on both ranks. Step through to materialize unit weights into the transient model buffer.";
+  refreshControls();
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-prev").addEventListener("click", stepPrev);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-reset").addEventListener("click", reset);
+document.getElementById("btn-mode").addEventListener("click", () => {
+  if (animating) return;
+  mode = mode === "sequential" ? "parallel" : "sequential";
+  document.getElementById("btn-mode").textContent = `Mode: ${mode}`;
+});
+
+buildDOM();
+reset();
+</script>
+</body>
+</html>
