@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP Gather: Even vs Uneven Shards</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #161821;
+    --panel-2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e7e8ec;
+    --muted: #8a8f9f;
+    --muted-2: #616777;
+    --accent: #89a7ff;
+    --good: #56c08b;
+    --bad: #d68a66;
+    --param: linear-gradient(135deg, #d4785c, #b8604a);
+    --param-solid: #c96f4f;
+    --param-glow: rgba(201,111,79,0.32);
+  }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(137, 167, 255, 0.08), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(212, 120, 92, 0.08), transparent 30%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 18px 48px;
+  }
+
+  h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    margin-bottom: 28px;
+  }
+
+  .scenario-banner {
+    width: min(980px, 100%);
+    background: rgba(22, 24, 33, 0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 22px;
+  }
+
+  .scenario-title {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .scenario-chips {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .chip {
+    font-size: 1.4rem;
+    line-height: 1;
+    padding: 7px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(29, 31, 45, 0.76);
+    color: #d9deef;
+  }
+
+  .chip.good { background: rgba(86, 192, 139, 0.16); }
+  .chip.bad { background: rgba(214, 138, 102, 0.16); }
+  .chip.arrow {
+    border: none;
+    background: transparent;
+    color: var(--muted-2);
+    padding-inline: 2px;
+  }
+
+  #stage {
+    position: relative;
+    width: min(1120px, 100%);
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .rank {
+    width: min(520px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    background: rgba(18, 20, 28, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 16px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+  }
+
+  .rank-label {
+    text-align: center;
+    font-size: 2rem;
+    font-weight: 700;
+    padding: 10px;
+    border-radius: 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    letter-spacing: 0.04em;
+  }
+
+  .buffer-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .buffer-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-size: 1.5rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    padding-left: 4px;
+  }
+
+  .buffer-label .note {
+    font-size: 1.2rem;
+    color: var(--muted-2);
+    letter-spacing: 0.04em;
+  }
+
+  .buffer {
+    display: flex;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    min-height: 96px;
+    align-items: center;
+    flex-wrap: wrap;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s, opacity 0.25s;
+  }
+
+  .buffer.highlight {
+    border-color: #b7c9ff;
+    background: rgba(28, 34, 54, 0.82);
+    box-shadow:
+      0 0 0 2px rgba(137, 167, 255, 0.3),
+      inset 0 0 0 1px rgba(137, 167, 255, 0.12),
+      0 0 28px rgba(137, 167, 255, 0.2);
+  }
+
+  .buffer.unused {
+    opacity: 0.42;
+  }
+
+  .param {
+    width: 72px;
+    height: 64px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+  }
+
+  .param.empty {
+    background: #1e2030;
+    border: 1px dashed #33384a;
+    color: transparent;
+  }
+
+  .param.full {
+    background: var(--param);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+
+  .param.list-entry {
+    border-style: dashed;
+  }
+
+  .param.source-glow {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 4px var(--param-glow), 0 6px 20px var(--param-glow);
+  }
+
+  .list-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    width: 100%;
+  }
+
+  .list-box {
+    border: 1px solid var(--border);
+    background: rgba(14, 16, 24, 0.7);
+    border-radius: 12px;
+    padding: 10px;
+    min-height: 92px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  }
+
+  .list-box.highlight {
+    border-color: var(--param-solid);
+    box-shadow: 0 0 0 2px rgba(201,111,79,0.2);
+    background: rgba(35, 21, 18, 0.78);
+  }
+
+  .list-label {
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-2);
+  }
+
+  .list-buffer {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    min-height: 54px;
+  }
+
+  .floater {
+    position: absolute;
+    width: 72px;
+    height: 64px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #fff;
+    pointer-events: none;
+    z-index: 10;
+    background: var(--param);
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .controls {
+    margin-top: 28px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 1.6rem;
+    font-weight: 600;
+    padding: 10px 22px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button:hover { background: #24273a; border-color: #3a3d4a; }
+  button:disabled { opacity: 0.45; cursor: default; }
+
+  .status-wrap {
+    margin-top: 18px;
+    width: min(980px, 100%);
+    background: rgba(22, 24, 33, 0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+
+  #status {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  #detail {
+    font-size: 1.3rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  #detail:empty { display: none; }
+
+  .legend {
+    margin-top: 20px;
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 1.4rem;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .legend-swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+
+  @media (max-width: 760px) {
+    .list-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>FSDP Gather: Even vs Uneven Shards</h1>
+<div class="scenario-banner">
+  <div class="scenario-title" id="scenario-title">Even Shards: direct single-tensor output</div>
+  <div class="scenario-chips" id="scenario-chips"></div>
+</div>
+
+<div id="stage"></div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+  <button id="btn-mode">Mode: parallel</button>
+  <button id="btn-scenario">Scenario: even/direct</button>
+</div>
+
+<div class="status-wrap">
+  <div id="status">Ready</div>
+  <div id="detail"></div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<script>
+const SCENARIOS = {
+  even: {
+    id: "even",
+    title: "Even Shards: direct output",
+    chips: [
+      { label: "even", kind: "good" },
+      { label: "→", kind: "arrow" },
+      { label: "direct", kind: "good" },
+    ],
+    paramsByOwner: {
+      0: ["p0", "p1", "p2"],
+      1: ["p3", "p4", "p5"],
+    },
+    steps: [
+      { title: "Direct gather", detail: "" },
+    ],
+  },
+  uneven: {
+    id: "uneven",
+    title: "Uneven Shards: list → copy",
+    chips: [
+      { label: "uneven", kind: "bad" },
+      { label: "→", kind: "arrow" },
+      { label: "list + copy", kind: "bad" },
+    ],
+    paramsByOwner: {
+      0: ["p0", "p1", "p2", "p3"],
+      1: ["p4", "p5"],
+    },
+    steps: [
+      { title: "Gather to list", detail: "" },
+      { title: "Copy list → flat", detail: "" },
+    ],
+  },
+};
+
+const ORDERED_OWNERS = [0, 1];
+const TOTAL_PARAMS = 6;
+const PARAM_STYLE = {
+  bg: "linear-gradient(135deg, #d4785c, #b8604a)",
+  solid: "#c96f4f",
+  glow: "rgba(201,111,79,0.32)",
+};
+
+const stage = document.getElementById("stage");
+const statusEl = document.getElementById("status");
+const detailEl = document.getElementById("detail");
+const legendEl = document.getElementById("legend");
+const scenarioTitleEl = document.getElementById("scenario-title");
+const scenarioChipsEl = document.getElementById("scenario-chips");
+
+const outSlots = {};
+const shardEls = {};
+const listSlots = {};
+const listBoxEls = {};
+const outBuffers = {};
+const listSectionBuffers = {};
+
+let scenarioKey = "even";
+let currentStep = 0;
+let animating = false;
+let mode = "parallel";
+let skipRequestedStep = false;
+
+function scheduleSkippable(callback, ms) {
+  let done = false;
+  let timerId = null;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (timerId !== null) clearTimeout(timerId);
+    callback();
+  };
+  timerId = window.setTimeout(finish, ms);
+  const watchSkip = () => {
+    if (done) return;
+    if (skipRequestedStep) { finish(); return; }
+    requestAnimationFrame(watchSkip);
+  };
+  requestAnimationFrame(watchSkip);
+}
+
+function getScenario() {
+  return SCENARIOS[scenarioKey];
+}
+
+function getShardOwner(paramName) {
+  const scenario = getScenario();
+  return ORDERED_OWNERS.find(owner => scenario.paramsByOwner[owner].includes(paramName));
+}
+
+function getShardParamsForRank(rank) {
+  return getScenario().paramsByOwner[rank];
+}
+
+function getOutputOrder() {
+  const scenario = getScenario();
+  return ORDERED_OWNERS.flatMap(owner => scenario.paramsByOwner[owner]);
+}
+
+function buildScenarioBanner() {
+  const scenario = getScenario();
+  scenarioTitleEl.textContent = scenario.title;
+  scenarioChipsEl.innerHTML = "";
+  scenario.chips.forEach(chipData => {
+    const chip = document.createElement("div");
+    chip.className = `chip ${chipData.kind}`;
+    chip.textContent = chipData.label;
+    scenarioChipsEl.appendChild(chip);
+  });
+}
+
+function buildDOM() {
+  stage.innerHTML = "";
+  Object.keys(outSlots).forEach(key => delete outSlots[key]);
+  Object.keys(shardEls).forEach(key => delete shardEls[key]);
+  Object.keys(listSlots).forEach(key => delete listSlots[key]);
+  Object.keys(listBoxEls).forEach(key => delete listBoxEls[key]);
+  Object.keys(outBuffers).forEach(key => delete outBuffers[key]);
+  Object.keys(listSectionBuffers).forEach(key => delete listSectionBuffers[key]);
+
+  buildScenarioBanner();
+
+  [0, 1].forEach(rank => {
+    const col = document.createElement("div");
+    col.className = "rank";
+
+    const label = document.createElement("div");
+    label.className = "rank-label";
+    label.textContent = `Rank ${rank}`;
+    col.appendChild(label);
+
+    const outSection = document.createElement("div");
+    outSection.className = "buffer-section";
+    outSection.innerHTML = `<div class="buffer-label"><span>Output</span></div>`;
+    const outBuf = document.createElement("div");
+    outBuf.className = "buffer";
+    outSlots[rank] = [];
+    for (let i = 0; i < TOTAL_PARAMS; i++) {
+      const slot = document.createElement("div");
+      slot.className = "param empty";
+      outBuf.appendChild(slot);
+      outSlots[rank].push(slot);
+    }
+    outSection.appendChild(outBuf);
+    outBuffers[rank] = outBuf;
+    col.appendChild(outSection);
+
+    const listSection = document.createElement("div");
+    listSection.className = "buffer-section";
+    listSection.innerHTML = `<div class="buffer-label"><span>List</span></div>`;
+    const listBuf = document.createElement("div");
+    listBuf.className = "buffer";
+    const grid = document.createElement("div");
+    grid.className = "list-grid";
+    listSlots[rank] = {};
+    listBoxEls[rank] = {};
+
+    ORDERED_OWNERS.forEach(owner => {
+      const box = document.createElement("div");
+      box.className = "list-box";
+      box.innerHTML = `<div class="list-label">list[${owner}]</div>`;
+      const inner = document.createElement("div");
+      inner.className = "list-buffer";
+      listSlots[rank][owner] = [];
+      getScenario().paramsByOwner[owner].forEach(() => {
+        const slot = document.createElement("div");
+        slot.className = "param empty";
+        inner.appendChild(slot);
+        listSlots[rank][owner].push(slot);
+      });
+      box.appendChild(inner);
+      grid.appendChild(box);
+      listBoxEls[rank][owner] = box;
+    });
+
+    listBuf.appendChild(grid);
+    listSection.appendChild(listBuf);
+    listSectionBuffers[rank] = listBuf;
+    col.appendChild(listSection);
+
+    const shardSection = document.createElement("div");
+    shardSection.className = "buffer-section";
+    shardSection.innerHTML = `<div class="buffer-label"><span>Shards</span></div>`;
+    const shardBuf = document.createElement("div");
+    shardBuf.className = "buffer";
+    getShardParamsForRank(rank).forEach(paramName => {
+      const el = document.createElement("div");
+      el.className = "param full";
+      el.textContent = paramName;
+      shardBuf.appendChild(el);
+      shardEls[paramName] = el;
+    });
+    shardSection.appendChild(shardBuf);
+    col.appendChild(shardSection);
+
+    stage.appendChild(col);
+  });
+
+  legendEl.innerHTML = `
+    <div class="legend-item"><div class="legend-swatch" style="background:${PARAM_STYLE.solid}"></div>Params</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#5a637d"></div>List path</div>
+  `;
+}
+
+function getPos(el) {
+  const sr = stage.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  return { x: r.left - sr.left, y: r.top - sr.top };
+}
+
+function sleep(ms) {
+  if (skipRequestedStep) return Promise.resolve();
+  return new Promise(r => scheduleSkippable(r, ms));
+}
+
+function clearHighlights() {
+  document.querySelectorAll(".buffer.highlight").forEach(el => el.classList.remove("highlight"));
+  document.querySelectorAll(".list-box.highlight").forEach(el => el.classList.remove("highlight"));
+  Object.values(shardEls).forEach(el => el.classList.remove("source-glow"));
+}
+
+function clearTransient() {
+  [0, 1].forEach(rank => {
+    outSlots[rank].forEach(slot => {
+      slot.className = "param empty";
+      slot.textContent = "";
+    });
+    ORDERED_OWNERS.forEach(owner => {
+      listSlots[rank][owner].forEach(slot => {
+        slot.className = "param empty";
+        slot.textContent = "";
+      });
+    });
+  });
+  stage.querySelectorAll(".floater").forEach(f => f.remove());
+  clearHighlights();
+}
+
+function setStatus(stepIdx, title, detail) {
+  const total = getScenario().steps.length;
+  statusEl.textContent = `${stepIdx + 1}/${total}  ${title}`;
+  detailEl.textContent = detail || "";
+}
+
+function fillSlot(slot, paramName, listEntry = false) {
+  slot.className = `param full${listEntry ? " list-entry" : ""}`;
+  slot.textContent = paramName;
+}
+
+function flyParam(srcEl, dstEl, paramName, onArrive) {
+  return new Promise(resolve => {
+    if (skipRequestedStep) { if (onArrive) onArrive(); resolve(); return; }
+    const srcPos = getPos(srcEl);
+    const dstPos = getPos(dstEl);
+    const f = document.createElement("div");
+    f.className = "floater";
+    f.textContent = paramName;
+    f.style.left = `${srcPos.x}px`;
+    f.style.top = `${srcPos.y}px`;
+    f.style.opacity = "0";
+    f.style.transition = "left 950ms cubic-bezier(0.25,0.8,0.25,1), top 950ms cubic-bezier(0.25,0.8,0.25,1), opacity 150ms ease";
+    stage.appendChild(f);
+
+    requestAnimationFrame(() => {
+      f.style.opacity = "1";
+      requestAnimationFrame(() => {
+        f.style.left = `${dstPos.x}px`;
+        f.style.top = `${dstPos.y}px`;
+      });
+    });
+
+    scheduleSkippable(() => {
+      if (onArrive) onArrive();
+      f.remove();
+      resolve();
+    }, 1000);
+  });
+}
+
+function highlightDirectPath() {
+  [0, 1].forEach(rank => {
+    outBuffers[rank].classList.add("highlight");
+    listSectionBuffers[rank].classList.add("unused");
+  });
+  Object.values(shardEls).forEach(el => el.classList.add("source-glow"));
+}
+
+function highlightUnevenListPath() {
+  [0, 1].forEach(rank => {
+    listSectionBuffers[rank].classList.add("highlight");
+    ORDERED_OWNERS.forEach(owner => listBoxEls[rank][owner].classList.add("highlight"));
+  });
+  Object.values(shardEls).forEach(el => el.classList.add("source-glow"));
+}
+
+function highlightCopyPath() {
+  [0, 1].forEach(rank => {
+    listSectionBuffers[rank].classList.add("highlight");
+    outBuffers[rank].classList.add("highlight");
+  });
+}
+
+async function animateEvenDirect() {
+  clearTransient();
+  highlightDirectPath();
+  const outputOrder = getOutputOrder();
+  await sleep(250);
+
+  if (mode === "sequential") {
+    for (let i = 0; i < outputOrder.length; i++) {
+      const paramName = outputOrder[i];
+      const srcEl = shardEls[paramName];
+      const flights = [0, 1].map(rank =>
+        flyParam(srcEl, outSlots[rank][i], paramName, () => fillSlot(outSlots[rank][i], paramName, false))
+      );
+      await Promise.all(flights);
+      if (i < outputOrder.length - 1) await sleep(180);
+    }
+  } else {
+    const flights = [];
+    outputOrder.forEach((paramName, i) => {
+      [0, 1].forEach(rank => {
+        flights.push(flyParam(shardEls[paramName], outSlots[rank][i], paramName, () => fillSlot(outSlots[rank][i], paramName, false)));
+      });
+    });
+    await Promise.all(flights);
+  }
+}
+
+async function animateUnevenGatherToList() {
+  clearTransient();
+  highlightUnevenListPath();
+  await sleep(250);
+
+  const tasks = [];
+  ORDERED_OWNERS.forEach(owner => {
+    getScenario().paramsByOwner[owner].forEach((paramName, localIdx) => {
+      [0, 1].forEach(rank => {
+        const dst = listSlots[rank][owner][localIdx];
+        const task = flyParam(shardEls[paramName], dst, paramName, () => fillSlot(dst, paramName, true));
+        if (mode === "parallel") tasks.push(task);
+      });
+    });
+  });
+
+  if (mode === "parallel") {
+    await Promise.all(tasks);
+    return;
+  }
+
+  for (const owner of ORDERED_OWNERS) {
+    for (let localIdx = 0; localIdx < getScenario().paramsByOwner[owner].length; localIdx++) {
+      const paramName = getScenario().paramsByOwner[owner][localIdx];
+      const flights = [0, 1].map(rank => {
+        const dst = listSlots[rank][owner][localIdx];
+        return flyParam(shardEls[paramName], dst, paramName, () => fillSlot(dst, paramName, true));
+      });
+      await Promise.all(flights);
+      await sleep(160);
+    }
+  }
+}
+
+async function animateUnevenCopyToOutput() {
+  clearHighlights();
+  highlightCopyPath();
+  await sleep(250);
+  const outputOrder = getOutputOrder();
+
+  if (mode === "sequential") {
+    for (let i = 0; i < outputOrder.length; i++) {
+      const paramName = outputOrder[i];
+      const owner = getShardOwner(paramName);
+      const localIdx = getScenario().paramsByOwner[owner].indexOf(paramName);
+      const flights = [0, 1].map(rank => {
+        const src = listSlots[rank][owner][localIdx];
+        return flyParam(src, outSlots[rank][i], paramName, () => fillSlot(outSlots[rank][i], paramName, false));
+      });
+      await Promise.all(flights);
+      if (i < outputOrder.length - 1) await sleep(160);
+    }
+    return;
+  }
+
+  const flights = [];
+  outputOrder.forEach((paramName, i) => {
+    const owner = getShardOwner(paramName);
+    const localIdx = getScenario().paramsByOwner[owner].indexOf(paramName);
+    [0, 1].forEach(rank => {
+      const src = listSlots[rank][owner][localIdx];
+      flights.push(flyParam(src, outSlots[rank][i], paramName, () => fillSlot(outSlots[rank][i], paramName, false)));
+    });
+  });
+  await Promise.all(flights);
+}
+
+async function executeStep(stepIdx) {
+  const step = getScenario().steps[stepIdx];
+  setStatus(stepIdx, step.title, step.detail);
+  if (scenarioKey === "even") {
+    await animateEvenDirect();
+    return;
+  }
+  if (stepIdx === 0) {
+    await animateUnevenGatherToList();
+  } else {
+    await animateUnevenCopyToOutput();
+  }
+}
+
+function reset() {
+  if (animating) return;
+  currentStep = 0;
+  clearTransient();
+  statusEl.textContent = "Ready";
+  detailEl.textContent = "";
+}
+
+async function playAll() {
+  if (animating) { skipRequestedStep = true; return; }
+  animating = true;
+  setButtons(true);
+  skipRequestedStep = false;
+  currentStep = 0;
+  const steps = getScenario().steps;
+  for (let i = 0; i < steps.length; i++) {
+    await executeStep(i);
+    currentStep = i + 1;
+    if (i < steps.length - 1) await sleep(900);
+  }
+  statusEl.textContent += " ✓";
+  animating = false;
+  setButtons(false);
+}
+
+async function stepOnce() {
+  if (animating) { skipRequestedStep = true; return; }
+  const steps = getScenario().steps;
+  if (currentStep >= steps.length) currentStep = 0;
+  animating = true;
+  setButtons(true);
+  skipRequestedStep = false;
+  await executeStep(currentStep);
+  currentStep += 1;
+  animating = false;
+  setButtons(false);
+}
+
+async function stepPrev() {
+  if (animating) return;
+  if (currentStep <= 0) { reset(); return; }
+  animating = true;
+  setButtons(true);
+  skipRequestedStep = true;
+  clearTransient();
+  const steps = getScenario().steps;
+  const targetStep = currentStep - 1;
+  for (let i = 0; i < targetStep; i++) {
+    await executeStep(i);
+  }
+  currentStep = targetStep;
+  skipRequestedStep = false;
+  if (currentStep === 0) statusEl.textContent = "Ready";
+  else setStatus(currentStep - 1, steps[currentStep - 1].title, steps[currentStep - 1].detail);
+  animating = false;
+  setButtons(false);
+}
+
+function setButtons(disabled) {
+  document.getElementById("btn-play").disabled = disabled;
+  document.getElementById("btn-step").disabled = disabled;
+  document.getElementById("btn-prev").disabled = disabled || currentStep === 0;
+}
+
+function toggleMode() {
+  mode = mode === "parallel" ? "sequential" : "parallel";
+  document.getElementById("btn-mode").textContent = `Mode: ${mode}`;
+}
+
+function toggleScenario() {
+  if (animating) return;
+  scenarioKey = scenarioKey === "even" ? "uneven" : "even";
+  document.getElementById("btn-scenario").textContent = `Scenario: ${scenarioKey === "even" ? "even/direct" : "uneven/list+copy"}`;
+  buildDOM();
+  reset();
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-prev").addEventListener("click", stepPrev);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-reset").addEventListener("click", reset);
+document.getElementById("btn-mode").addEventListener("click", toggleMode);
+document.getElementById("btn-scenario").addEventListener("click", toggleScenario);
+
+buildDOM();
+reset();
+</script>
+</body>
+</html>

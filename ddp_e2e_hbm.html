@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DDP End-to-End HBM Movement</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #161821;
+    --panel-2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e7e8ec;
+    --muted: #8a8f9f;
+    --muted-2: #616777;
+    --accent: #89a7ff;
+    --good: #69c189;
+    --warn: #d4785c;
+    --act: #5678cc;
+  }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(105, 145, 231, 0.08), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(212, 120, 92, 0.08), transparent 28%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 18px 48px;
+  }
+
+  h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    margin-bottom: 28px;
+  }
+
+  .timeline {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .phase-pill {
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(26, 29, 39, 0.92);
+    color: var(--muted);
+    min-width: 140px;
+    text-align: center;
+    transition: border-color 0.25s, box-shadow 0.25s, color 0.25s, background 0.25s;
+  }
+
+  .phase-pill .phase-name {
+    display: block;
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+  }
+
+  .phase-pill .phase-step {
+    font-size: 1.5rem;
+  }
+
+  .phase-pill.active {
+    color: var(--text);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(137, 167, 255, 0.25), 0 14px 28px rgba(0, 0, 0, 0.18);
+    background: rgba(26, 29, 39, 1);
+  }
+
+  .phase-pill.done {
+    color: #cbd3ee;
+    border-color: rgba(137, 167, 255, 0.35);
+  }
+
+  .compare-card {
+    width: min(960px, 100%);
+    background: rgba(18, 20, 28, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 16px;
+    margin-bottom: 24px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.2);
+  }
+
+  .compare-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .compare-title {
+    font-size: 2rem;
+    font-weight: 700;
+  }
+
+  .compare-note {
+    font-size: 1.2rem;
+    color: var(--muted);
+  }
+
+  .meter {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .meter:last-child { margin-bottom: 0; }
+
+  .meter-label {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 1.5rem;
+    color: var(--muted);
+  }
+
+  .meter-track {
+    position: relative;
+    height: 18px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(29, 31, 45, 0.7);
+    overflow: hidden;
+  }
+
+  .meter-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 999px;
+    transition: width 0.3s ease;
+  }
+
+  .meter-fill.ddp { background: linear-gradient(90deg, #d4785c, #b8604a); }
+  .meter-fill.fsdp { background: linear-gradient(90deg, #5d82db, #4767b7); }
+
+  .meter-peak-line {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background: rgba(255,255,255,0.8);
+    opacity: 0.85;
+  }
+
+  #stage {
+    position: relative;
+    width: min(1180px, 100%);
+    display: flex;
+    gap: 30px;
+    justify-content: center;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .rank-card {
+    width: min(560px, 100%);
+    background: rgba(18, 20, 28, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+  }
+
+  .rank-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    gap: 12px;
+  }
+
+  .rank-label {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .rank-note {
+    font-size: 1.2rem;
+    color: var(--muted-2);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .hbm-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+  }
+
+  .memory-group {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    background: rgba(26, 29, 39, 0.75);
+  }
+
+  .memory-group.persistent { background: linear-gradient(180deg, rgba(212, 120, 92, 0.12), rgba(26, 29, 39, 0.78)); }
+  .memory-group.transient { background: linear-gradient(180deg, rgba(105, 145, 231, 0.12), rgba(26, 29, 39, 0.78)); }
+
+  .group-title {
+    font-size: 1.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: var(--muted);
+  }
+
+  .section {
+    margin-bottom: 18px;
+  }
+
+  .section:last-child { margin-bottom: 0; }
+
+  .section-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 1.4rem;
+    color: var(--muted);
+  }
+
+  .section-label .capacity {
+    color: var(--muted-2);
+    font-size: 1.2rem;
+    letter-spacing: 0.05em;
+  }
+
+  .buffer {
+    position: relative;
+    min-height: 82px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(15, 17, 23, 0.65);
+    padding: 14px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  }
+
+  .buffer.activation-buffer {
+    background: rgba(105, 145, 231, 0.08);
+  }
+
+  .buffer.highlight {
+    border-color: #b7c9ff;
+    border-width: 2px;
+    background: rgba(28, 34, 54, 0.82);
+    box-shadow:
+      0 0 0 2px rgba(137, 167, 255, 0.34),
+      inset 0 0 0 2px rgba(137, 167, 255, 0.2),
+      0 0 34px rgba(137, 167, 255, 0.28);
+  }
+
+  .slot {
+    width: 58px;
+    height: 46px;
+    border-radius: 10px;
+    border: 1px dashed rgba(90, 95, 110, 0.45);
+    background: rgba(29, 31, 45, 0.55);
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, background 0.25s, transform 0.25s, opacity 0.25s, box-shadow 0.25s;
+  }
+
+  .slot.activation-slot {
+    width: calc(50% - 4px);
+    min-width: 118px;
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .slot.filled {
+    border-style: solid;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .block {
+    width: 100%;
+    height: 100%;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    transition: transform 0.25s, box-shadow 0.25s, opacity 0.25s, filter 0.25s;
+  }
+
+  .block.small {
+    font-size: 1.1rem;
+    letter-spacing: 0.02em;
+  }
+
+  .block.activation {
+    background: linear-gradient(135deg, #5d82db, #4767b7);
+  }
+
+  .block.pulse {
+    transform: scale(1.08);
+    box-shadow:
+      0 0 0 3px rgba(183, 201, 255, 0.72),
+      0 0 0 7px rgba(137, 167, 255, 0.24),
+      0 14px 28px rgba(137, 167, 255, 0.32);
+  }
+
+  .block.updated {
+    box-shadow:
+      0 0 0 3px rgba(136, 212, 156, 0.78),
+      0 0 0 7px rgba(136, 212, 156, 0.24),
+      0 0 34px rgba(136, 212, 156, 0.3);
+  }
+
+  .controls {
+    margin-top: 26px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 1.6rem;
+    font-weight: 600;
+    padding: 10px 22px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  }
+
+  button:hover {
+    background: #23273a;
+    border-color: #3b3f52;
+  }
+
+  button:disabled {
+    opacity: 0.45;
+    cursor: default;
+    transform: none;
+  }
+
+  .status-wrap {
+    margin-top: 18px;
+    width: min(980px, 100%);
+    background: rgba(22, 24, 33, 0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+
+  #status {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  #detail {
+    font-size: 1.3rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  #detail:empty { display: none; }
+
+  .compute-cue {
+    margin-top: 10px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    min-height: 28px;
+  }
+
+  .compute-cue.hidden {
+    display: none;
+  }
+
+  .cue-chip {
+    font-size: 1.3rem;
+    line-height: 1;
+    padding: 7px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(29, 31, 45, 0.7);
+    color: #d7dcef;
+    white-space: nowrap;
+  }
+
+  .cue-chip.arrow {
+    padding: 7px 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted-2);
+  }
+
+  .cue-chip.source {
+    background: rgba(88, 111, 173, 0.18);
+  }
+
+  .cue-chip.result {
+    background: rgba(78, 143, 113, 0.18);
+  }
+
+  .legend {
+    margin-top: 20px;
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 1.4rem;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .legend-swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  @media (max-width: 980px) {
+    .hbm-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 620px) {
+    body { padding: 26px 12px 36px; }
+    .slot.activation-slot {
+      width: 100%;
+      min-width: 0;
+      flex-basis: 100%;
+    }
+  }
+</style>
+</head>
+<body>
+
+<h1>DDP / Full Replication End-to-End</h1>
+
+<div class="timeline">
+  <div class="phase-pill" id="phase-forward">
+    <span class="phase-name">Forward</span>
+    <span class="phase-step" id="phase-forward-step">U1 next</span>
+  </div>
+  <div class="phase-pill" id="phase-backward">
+    <span class="phase-name">Backward</span>
+    <span class="phase-step" id="phase-backward-step">Waiting</span>
+  </div>
+  <div class="phase-pill" id="phase-optimizer">
+    <span class="phase-name">Optimizer</span>
+    <span class="phase-step" id="phase-optimizer-step">Waiting</span>
+  </div>
+</div>
+
+<div class="compare-card">
+  <div class="compare-header">
+    <div class="compare-title">Peak Memory</div>
+  </div>
+  <div class="meter">
+    <div class="meter-label">
+      <span id="ddp-current-label">DDP current 12 / 19</span>
+      <span id="ddp-peak-label">peak 12</span>
+    </div>
+    <div class="meter-track">
+      <div class="meter-fill ddp" id="ddp-current-fill" style="width:0%"></div>
+      <div class="meter-peak-line" id="ddp-peak-line" style="left:0%"></div>
+    </div>
+  </div>
+  <div class="meter">
+    <div class="meter-label">
+      <span>FSDP reference peak</span>
+      <span id="fsdp-ref-label">16 / 19</span>
+    </div>
+    <div class="meter-track">
+      <div class="meter-fill fsdp" id="fsdp-ref-fill" style="width:0%"></div>
+    </div>
+  </div>
+</div>
+
+<div id="stage"></div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+</div>
+
+<div class="status-wrap">
+  <div id="status">Ready</div>
+  <div id="detail"></div>
+  <div id="compute-cue" class="compute-cue hidden"></div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<script>
+const CONFIG = {
+  ranks: [0, 1],
+  units: [
+    {
+      id: "u1",
+      label: "U1",
+      activationLabel: "act U1",
+      color: {
+        bg: "linear-gradient(135deg, #34b3a4, #2a8f83)",
+        solid: "#2f9d90",
+      },
+      params: ["p0", "p1"],
+    },
+    {
+      id: "u2",
+      label: "U2",
+      activationLabel: "act U2",
+      color: {
+        bg: "linear-gradient(135deg, #d4785c, #b8604a)",
+        solid: "#c96f4f",
+      },
+      params: ["p2", "p3", "p4", "p5"],
+    },
+  ],
+  activationColor: { bg: "linear-gradient(135deg, #5d82db, #4767b7)", solid: "#5678cc" },
+  fsdpReferencePeak: 16,
+  ddpMaxPeak: 19,
+};
+
+const TOTAL_PARAMS = CONFIG.units.reduce((sum, unit) => sum + unit.params.length, 0);
+const stage = document.getElementById("stage");
+const statusEl = document.getElementById("status");
+const detailEl = document.getElementById("detail");
+const computeCueEl = document.getElementById("compute-cue");
+const legendEl = document.getElementById("legend");
+const phaseTextEls = {
+  forward: document.getElementById("phase-forward-step"),
+  backward: document.getElementById("phase-backward-step"),
+  optimizer: document.getElementById("phase-optimizer-step"),
+};
+const phaseEls = {
+  forward: document.getElementById("phase-forward"),
+  backward: document.getElementById("phase-backward"),
+  optimizer: document.getElementById("phase-optimizer"),
+};
+
+const paramSlots = {};
+const paramBlocks = {};
+const gradSlots = {};
+const gradBlocks = {};
+const optSlots = {};
+const optBlocks = {};
+const activationSlots = {};
+const activationBlocks = {};
+const paramBuffers = {};
+const gradBuffers = {};
+const optBuffers = {};
+const activationBuffers = {};
+
+let currentStep = 0;
+let animating = false;
+let renderMode = "animate";
+let skipRequestedStep = false;
+
+function scheduleSkippable(callback, ms) {
+  let done = false;
+  let timerId = null;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (timerId !== null) clearTimeout(timerId);
+    callback();
+  };
+  timerId = window.setTimeout(finish, ms);
+  const watchSkip = () => {
+    if (done) return;
+    if (skipRequestedStep || renderMode === "instant") { finish(); return; }
+    requestAnimationFrame(watchSkip);
+  };
+  requestAnimationFrame(watchSkip);
+}
+let peakCount = 0;
+
+const DUR = { short: 220, medium: 420 };
+
+function buildLegend() {
+  legendEl.innerHTML = `
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[0].color.solid}"></div>${CONFIG.units[0].label}</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[1].color.solid}"></div>${CONFIG.units[1].label}</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.activationColor.solid}"></div>Activations</div>
+  `;
+}
+
+function createSlot(slotClass = "") {
+  const slot = document.createElement("div");
+  slot.className = `slot ${slotClass}`.trim();
+  return slot;
+}
+
+function appendBlock(slot, label, style, extraClass = "") {
+  slot.innerHTML = "";
+  slot.classList.add("filled");
+  const block = document.createElement("div");
+  block.className = `block ${extraClass}`.trim();
+  block.textContent = label;
+  block.style.background = style.bg;
+  slot.appendChild(block);
+  return block;
+}
+
+function createSection(title, capacity, bufferClass, fillFn) {
+  const section = document.createElement("div");
+  section.className = "section";
+  const label = document.createElement("div");
+  label.className = "section-label";
+  label.textContent = title;
+  section.appendChild(label);
+  const buffer = document.createElement("div");
+  buffer.className = `buffer ${bufferClass || ""}`.trim();
+  section.appendChild(buffer);
+  fillFn(buffer);
+  return { section, buffer };
+}
+
+function buildDOM() {
+  stage.innerHTML = "";
+  [paramSlots, paramBlocks, gradSlots, gradBlocks, optSlots, optBlocks, activationSlots, activationBlocks, paramBuffers, gradBuffers, optBuffers, activationBuffers].forEach(store => {
+    Object.keys(store).forEach(key => delete store[key]);
+  });
+
+  CONFIG.ranks.forEach(rank => {
+    const card = document.createElement("div");
+    card.className = "rank-card";
+    card.innerHTML = `<div class="rank-header"><div class="rank-label">Rank ${rank}</div></div>`;
+    const grid = document.createElement("div");
+    grid.className = "hbm-grid";
+
+    const persistent = document.createElement("div");
+    persistent.className = "memory-group persistent";
+    persistent.innerHTML = `<div class="group-title">Persistent </div>`;
+    const transient = document.createElement("div");
+    transient.className = "memory-group transient";
+    transient.innerHTML = `<div class="group-title">Transient </div>`;
+
+    const paramSection = createSection("Parameters", "", "", buffer => {
+      CONFIG.units.forEach(unit => {
+        unit.params.forEach(param => {
+          const slot = createSlot();
+          const block = appendBlock(slot, param, unit.color);
+          buffer.appendChild(slot);
+          paramSlots[`${rank}:${param}`] = slot;
+          paramBlocks[`${rank}:${param}`] = block;
+        });
+      });
+      paramBuffers[rank] = buffer;
+    });
+    persistent.appendChild(paramSection.section);
+
+    const gradSection = createSection("Gradients", "", "", buffer => {
+      CONFIG.units.forEach(unit => {
+        unit.params.forEach(param => {
+          const slot = createSlot();
+          buffer.appendChild(slot);
+          gradSlots[`${rank}:${param}`] = slot;
+        });
+      });
+      gradBuffers[rank] = buffer;
+    });
+    persistent.appendChild(gradSection.section);
+
+    const optSection = createSection("Optimizer State", "", "", buffer => {
+      CONFIG.units.forEach(unit => {
+        unit.params.forEach(param => {
+          const slot = createSlot();
+          const block = appendBlock(slot, `opt ${param}`, { bg: unit.color.bg }, "small");
+          buffer.appendChild(slot);
+          optSlots[`${rank}:${param}`] = slot;
+          optBlocks[`${rank}:${param}`] = block;
+        });
+      });
+      optBuffers[rank] = buffer;
+    });
+    persistent.appendChild(optSection.section);
+
+    const actSection = createSection("Saved Activations", "", "activation-buffer", buffer => {
+      activationSlots[rank] = {};
+      CONFIG.units.forEach(unit => {
+        const slot = createSlot("activation-slot");
+        buffer.appendChild(slot);
+        activationSlots[rank][unit.id] = slot;
+      });
+      activationBuffers[rank] = buffer;
+    });
+    transient.appendChild(actSection.section);
+
+    grid.appendChild(persistent);
+    grid.appendChild(transient);
+    card.appendChild(grid);
+    stage.appendChild(card);
+  });
+
+  buildLegend();
+  updateMeter();
+}
+
+function sleep(ms) {
+  if (renderMode === "instant" || skipRequestedStep) return Promise.resolve();
+  return new Promise(r => scheduleSkippable(r, ms));
+}
+
+function setPhaseState(activePhase, stepText) {
+  const forwardDone = activePhase === "backward" || activePhase === "optimizer";
+  const backwardDone = activePhase === "optimizer";
+  Object.entries(phaseEls).forEach(([phase, el]) => {
+    el.classList.toggle("active", phase === activePhase);
+    el.classList.toggle("done", (phase === "forward" && forwardDone) || (phase === "backward" && backwardDone));
+  });
+  if (stepText.forward) phaseTextEls.forward.textContent = stepText.forward;
+  if (stepText.backward) phaseTextEls.backward.textContent = stepText.backward;
+  if (stepText.optimizer) phaseTextEls.optimizer.textContent = stepText.optimizer;
+}
+
+function setStatus(title, detail) {
+  statusEl.textContent = `${currentStep + 1}/${STEPS.length}  ${title}`;
+  detailEl.textContent = detail || "";
+}
+
+function setComputeCue(parts = []) {
+  computeCueEl.innerHTML = "";
+  if (!parts.length) {
+    computeCueEl.classList.add("hidden");
+    return;
+  }
+  computeCueEl.classList.remove("hidden");
+  parts.forEach(part => {
+    const chip = document.createElement("div");
+    chip.className = `cue-chip ${part.type || "source"}`;
+    chip.textContent = part.label;
+    computeCueEl.appendChild(chip);
+  });
+}
+
+function clearSlot(slot) {
+  slot.innerHTML = "";
+  slot.classList.remove("filled");
+}
+
+function clearHighlights() {
+  setComputeCue([]);
+  document.querySelectorAll(".buffer.highlight").forEach(el => el.classList.remove("highlight"));
+  document.querySelectorAll(".block.pulse").forEach(el => el.classList.remove("pulse"));
+  document.querySelectorAll(".block.updated").forEach(el => el.classList.remove("updated"));
+}
+
+function highlightBuffers(buffers) {
+  buffers.forEach(buffer => buffer.classList.add("highlight"));
+}
+
+function getUnitForParam(param) {
+  return CONFIG.units.find(unit => unit.params.includes(param));
+}
+
+function setPersistentLabelsPrimed(primed) {
+  CONFIG.ranks.forEach(rank => {
+    CONFIG.units.forEach(unit => {
+      unit.params.forEach(param => {
+        paramBlocks[`${rank}:${param}`].textContent = primed ? `${param}'` : param;
+        optBlocks[`${rank}:${param}`].textContent = primed ? `opt ${param}'` : `opt ${param}`;
+      });
+    });
+  });
+}
+
+function fillActivation(unit) {
+  CONFIG.ranks.forEach(rank => {
+    activationBlocks[`${rank}:${unit.id}`] = appendBlock(
+      activationSlots[rank][unit.id],
+      unit.activationLabel,
+      CONFIG.activationColor,
+      "activation small"
+    );
+  });
+}
+
+function clearActivation(unit) {
+  CONFIG.ranks.forEach(rank => {
+    clearSlot(activationSlots[rank][unit.id]);
+    delete activationBlocks[`${rank}:${unit.id}`];
+  });
+}
+
+function fillGrad(param) {
+  const unit = getUnitForParam(param);
+  CONFIG.ranks.forEach(rank => {
+    gradBlocks[`${rank}:${param}`] = appendBlock(gradSlots[`${rank}:${param}`], `∇${param}`, unit.color);
+  });
+}
+
+function clearAllGrads() {
+  CONFIG.ranks.forEach(rank => {
+    CONFIG.units.forEach(unit => {
+      unit.params.forEach(param => clearSlot(gradSlots[`${rank}:${param}`]));
+    });
+  });
+}
+
+function countFilledPerRank(rank) {
+  let count = 0;
+  stage.querySelectorAll(".rank-card")[rank].querySelectorAll(".slot.filled").forEach(() => { count += 1; });
+  return count;
+}
+
+function getCurrentCount() {
+  return countFilledPerRank(0);
+}
+
+function updateMeter() {
+  const current = getCurrentCount();
+  peakCount = Math.max(peakCount, current);
+  const max = CONFIG.ddpMaxPeak;
+  const currentPct = (current / max) * 100;
+  const peakPct = (peakCount / max) * 100;
+  const fsdpPct = (CONFIG.fsdpReferencePeak / max) * 100;
+  document.getElementById("ddp-current-fill").style.width = `${currentPct}%`;
+  document.getElementById("ddp-peak-line").style.left = `${peakPct}%`;
+  document.getElementById("fsdp-ref-fill").style.width = `${fsdpPct}%`;
+  document.getElementById("ddp-current-label").textContent = `DDP current ${current} / ${max}`;
+  document.getElementById("ddp-peak-label").textContent = `peak ${peakCount}`;
+  document.getElementById("fsdp-ref-label").textContent = `${CONFIG.fsdpReferencePeak} / ${max}`;
+}
+
+function updateHighlightsAndMeter(buffers = []) {
+  clearHighlights();
+  highlightBuffers(buffers);
+  updateMeter();
+}
+
+async function animateForward(unit) {
+  updateHighlightsAndMeter(CONFIG.ranks.map(rank => activationBuffers[rank]).concat(CONFIG.ranks.map(rank => paramBuffers[rank])));
+  pulseUnitParams(unit);
+  await sleep(DUR.medium);
+  fillActivation(unit);
+  updateMeter();
+  pulseUnitActivations(unit);
+  await sleep(DUR.short);
+}
+
+function pulseUnitParams(unit) {
+  CONFIG.ranks.forEach(rank => {
+    unit.params.forEach(param => paramBlocks[`${rank}:${param}`].classList.add("pulse"));
+  });
+}
+
+function pulseUnitActivations(unit) {
+  CONFIG.ranks.forEach(rank => {
+    const block = activationSlots[rank][unit.id].querySelector(".block");
+    if (block) block.classList.add("pulse");
+  });
+}
+
+async function animateBackward(unit) {
+  updateHighlightsAndMeter(
+    CONFIG.ranks.map(rank => paramBuffers[rank])
+      .concat(CONFIG.ranks.map(rank => gradBuffers[rank]))
+      .concat(CONFIG.ranks.map(rank => activationBuffers[rank]))
+  );
+  setComputeCue([
+    { label: "params", type: "source" },
+    { label: "+", type: "arrow" },
+    { label: "activations", type: "source" },
+    { label: "→", type: "arrow" },
+    { label: "grads", type: "result" },
+  ]);
+  pulseUnitParams(unit);
+  pulseUnitActivations(unit);
+  await sleep(DUR.medium);
+  unit.params.forEach(fillGrad);
+  updateMeter();
+  CONFIG.ranks.forEach(rank => {
+    unit.params.forEach(param => {
+      const block = gradSlots[`${rank}:${param}`].querySelector(".block");
+      if (block) block.classList.add("pulse");
+    });
+  });
+  await sleep(DUR.short);
+  clearActivation(unit);
+  updateMeter();
+}
+
+async function animateOptimizerParams() {
+  updateHighlightsAndMeter(CONFIG.ranks.map(rank => paramBuffers[rank]).concat(CONFIG.ranks.map(rank => gradBuffers[rank])).concat(CONFIG.ranks.map(rank => optBuffers[rank])));
+  setComputeCue([
+    { label: "grads", type: "source" },
+    { label: "+", type: "arrow" },
+    { label: "opt state", type: "source" },
+    { label: "→", type: "arrow" },
+    { label: "params", type: "result" },
+  ]);
+  await sleep(DUR.medium);
+  CONFIG.ranks.forEach(rank => {
+    CONFIG.units.forEach(unit => {
+      unit.params.forEach(param => {
+        paramBlocks[`${rank}:${param}`].textContent = `${param}'`;
+        paramBlocks[`${rank}:${param}`].classList.add("updated");
+      });
+    });
+  });
+  await sleep(DUR.short);
+}
+
+async function animateOptimizerState() {
+  updateHighlightsAndMeter(CONFIG.ranks.map(rank => gradBuffers[rank]).concat(CONFIG.ranks.map(rank => optBuffers[rank])));
+  setComputeCue([
+    { label: "grads", type: "source" },
+    { label: "+", type: "arrow" },
+    { label: "opt state", type: "source" },
+    { label: "→", type: "arrow" },
+    { label: "opt state'", type: "result" },
+  ]);
+  await sleep(DUR.medium);
+  CONFIG.ranks.forEach(rank => {
+    CONFIG.units.forEach(unit => {
+      unit.params.forEach(param => {
+        optBlocks[`${rank}:${param}`].textContent = `opt ${param}'`;
+        optBlocks[`${rank}:${param}`].classList.add("updated");
+      });
+    });
+  });
+  await sleep(DUR.short);
+  clearAllGrads();
+  updateMeter();
+}
+
+function resetState() {
+  clearHighlights();
+  setPersistentLabelsPrimed(false);
+  clearAllGrads();
+  CONFIG.units.forEach(clearActivation);
+  peakCount = getCurrentCount();
+  phaseEls.forward.classList.remove("active", "done");
+  phaseEls.backward.classList.remove("active", "done");
+  phaseEls.optimizer.classList.remove("active", "done");
+  phaseTextEls.forward.textContent = "U1 next";
+  phaseTextEls.backward.textContent = "Waiting";
+  phaseTextEls.optimizer.textContent = "Waiting";
+  updateMeter();
+}
+
+const STEPS = [
+  { title: "Compute U1", detail: "", before: () => setPhaseState("forward", { forward: "U1 compute", backward: "Waiting", optimizer: "Waiting" }), run: () => animateForward(CONFIG.units[0]) },
+  { title: "Compute U2", detail: "", before: () => setPhaseState("forward", { forward: "Fwd done", backward: "U2 next", optimizer: "Waiting" }), run: () => animateForward(CONFIG.units[1]) },
+  { title: "Grads U2", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U2 grads", optimizer: "Waiting" }), run: () => animateBackward(CONFIG.units[1]) },
+  { title: "Grads U1", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "Bwd done", optimizer: "Ready" }), run: () => animateBackward(CONFIG.units[0]) },
+  { title: "Optimizer: params", detail: "", before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "Params" }), run: () => animateOptimizerParams() },
+  { title: "Optimizer: state", detail: "", before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "State" }), run: () => animateOptimizerState() },
+];
+
+async function executeStep(index) {
+  const step = STEPS[index];
+  step.before();
+  setStatus(step.title, step.detail);
+  await step.run();
+}
+
+async function playAll() {
+  if (animating) { skipRequestedStep = true; return; }
+  animating = true;
+  skipRequestedStep = false;
+  refreshControls();
+  if (currentStep >= STEPS.length) {
+    currentStep = 0;
+    resetState();
+  }
+  while (currentStep < STEPS.length) {
+    await executeStep(currentStep);
+    currentStep += 1;
+    if (currentStep < STEPS.length) await sleep(DUR.medium);
+  }
+  statusEl.textContent = "Done ✓";
+  detailEl.textContent = "";
+  setComputeCue([]);
+  animating = false;
+  refreshControls();
+}
+
+async function stepOnce() {
+  if (animating) { skipRequestedStep = true; return; }
+  if (currentStep >= STEPS.length) {
+    reset();
+    return;
+  }
+  animating = true;
+  refreshControls();
+  skipRequestedStep = false;
+  await executeStep(currentStep);
+  currentStep += 1;
+  animating = false;
+  refreshControls();
+}
+
+async function stepPrev() {
+  if (animating) return;
+  if (currentStep <= 0) {
+    reset();
+    return;
+  }
+  animating = true;
+  refreshControls();
+  const target = currentStep - 2;
+  const prevMode = renderMode;
+  renderMode = "instant";
+  resetState();
+  currentStep = 0;
+  for (let i = 0; i <= target; i++) {
+    await executeStep(i);
+    currentStep = i + 1;
+  }
+  if (target < 0) {
+    statusEl.textContent = "Ready";
+    detailEl.textContent = "";
+  }
+  renderMode = prevMode;
+  animating = false;
+  refreshControls();
+}
+
+function refreshControls() {
+  document.getElementById("btn-play").disabled = animating;
+  document.getElementById("btn-step").disabled = animating;
+  document.getElementById("btn-prev").disabled = animating || currentStep === 0;
+}
+
+function reset() {
+  if (animating) return;
+  currentStep = 0;
+  resetState();
+  statusEl.textContent = "Ready";
+  detailEl.textContent = "";
+  refreshControls();
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-prev").addEventListener("click", stepPrev);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-reset").addEventListener("click", reset);
+
+buildDOM();
+reset();
+</script>
+</body>
+</html>

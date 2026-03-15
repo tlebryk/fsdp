@@ -36,42 +36,10 @@
   }
 
   h1 {
-    font-size: 1.45rem;
+    font-size: 3.5rem;
     font-weight: 700;
     letter-spacing: 0.03em;
-    margin-bottom: 8px;
-  }
-
-  .subtitle {
-    font-size: 0.9rem;
-    color: var(--muted);
-    text-align: center;
-    max-width: 860px;
-    line-height: 1.45;
-    margin-bottom: 18px;
-  }
-
-  details {
-    font-size: 0.8rem;
-    color: var(--muted);
-    margin-bottom: 24px;
-    max-width: 840px;
-    text-align: left;
-    background: rgba(22, 24, 33, 0.7);
-    border: 1px solid rgba(42, 45, 58, 0.8);
-    border-radius: 12px;
-    padding: 12px 14px;
-  }
-
-  details summary {
-    cursor: pointer;
-    color: var(--muted-2);
-    font-weight: 600;
-  }
-
-  details p {
-    margin-top: 10px;
-    line-height: 1.5;
+    margin-bottom: 28px;
   }
 
   .timeline {
@@ -95,7 +63,7 @@
 
   .phase-pill .phase-name {
     display: block;
-    font-size: 0.72rem;
+    font-size: 1.4rem;
     font-weight: 700;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -103,7 +71,7 @@
   }
 
   .phase-pill .phase-step {
-    font-size: 0.78rem;
+    font-size: 1.5rem;
   }
 
   .phase-pill.active {
@@ -148,13 +116,13 @@
   }
 
   .rank-label {
-    font-size: 1rem;
+    font-size: 2rem;
     font-weight: 700;
     letter-spacing: 0.04em;
   }
 
   .rank-note {
-    font-size: 0.72rem;
+    font-size: 1.2rem;
     color: var(--muted-2);
     text-transform: uppercase;
     letter-spacing: 0.1em;
@@ -177,7 +145,7 @@
   .memory-group.transient { background: linear-gradient(180deg, rgba(196, 127, 95, 0.12), rgba(26, 29, 39, 0.78)); }
 
   .group-title {
-    font-size: 0.7rem;
+    font-size: 1.5rem;
     text-transform: uppercase;
     letter-spacing: 0.12em;
     font-weight: 700;
@@ -197,13 +165,13 @@
     align-items: center;
     gap: 8px;
     margin-bottom: 10px;
-    font-size: 0.72rem;
+    font-size: 1.4rem;
     color: var(--muted);
   }
 
   .section-label .capacity {
     color: var(--muted-2);
-    font-size: 0.65rem;
+    font-size: 1.2rem;
     letter-spacing: 0.05em;
   }
 
@@ -270,7 +238,7 @@
     align-items: center;
     justify-content: center;
     text-align: center;
-    font-size: 0.73rem;
+    font-size: 1.4rem;
     font-weight: 700;
     color: #fff;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -279,7 +247,7 @@
   }
 
   .block.small {
-    font-size: 0.64rem;
+    font-size: 1.1rem;
     letter-spacing: 0.02em;
   }
 
@@ -320,7 +288,7 @@
     align-items: center;
     justify-content: center;
     text-align: center;
-    font-size: 0.73rem;
+    font-size: 1.4rem;
     font-weight: 700;
     color: #fff;
     pointer-events: none;
@@ -340,7 +308,7 @@
 
   button {
     font-family: inherit;
-    font-size: 0.86rem;
+    font-size: 1.6rem;
     font-weight: 600;
     padding: 10px 22px;
     border-radius: 10px;
@@ -372,16 +340,17 @@
   }
 
   #status {
-    font-size: 0.92rem;
+    font-size: 1.8rem;
     font-weight: 700;
     margin-bottom: 6px;
   }
 
   #detail {
-    font-size: 0.82rem;
+    font-size: 1.3rem;
     color: var(--muted);
     line-height: 1.45;
   }
+  #detail:empty { display: none; }
 
   .compute-cue {
     margin-top: 10px;
@@ -397,7 +366,7 @@
   }
 
   .cue-chip {
-    font-size: 0.72rem;
+    font-size: 1.3rem;
     line-height: 1;
     padding: 7px 10px;
     border-radius: 999px;
@@ -425,11 +394,11 @@
   .legend {
     margin-top: 20px;
     display: flex;
-    gap: 20px;
+    gap: 24px;
     justify-content: center;
     flex-wrap: wrap;
     color: var(--muted);
-    font-size: 0.76rem;
+    font-size: 1.4rem;
   }
 
   .legend-item {
@@ -439,8 +408,8 @@
   }
 
   .legend-swatch {
-    width: 15px;
-    height: 15px;
+    width: 22px;
+    height: 22px;
     border-radius: 4px;
     border: 1px solid rgba(255, 255, 255, 0.12);
   }
@@ -464,20 +433,6 @@
 <body>
 
 <h1>FSDP End-to-End HBM Movement</h1>
-<div class="subtitle">
-  Two ranks, two FSDP units, and one fixed HBM layout per rank. The animation tracks what stays resident,
-  what is materialized transiently, and when gradients and optimizer state are used.
-</div>
-
-<details>
-  <summary>What this view is showing</summary>
-  <p>
-    Persistent regions keep parameter shards and optimizer state resident for the whole iteration. The transient
-    side shows the all-gathered full parameters, saved activations from forward, and the transient full gradients
-    created during backward before reduce-scatter returns each rank to only its gradient shard.
-  </p>
-</details>
-
 <div class="timeline">
   <div class="phase-pill" id="phase-forward">
     <span class="phase-name">Forward</span>
@@ -505,7 +460,7 @@
 
 <div class="status-wrap">
   <div id="status">Ready</div>
-  <div id="detail">Persistent parameter shards and optimizer state are resident on both ranks. Step through to materialize unit weights into the transient model buffer.</div>
+  <div id="detail"></div>
   <div id="compute-cue" class="compute-cue hidden"></div>
 </div>
 
@@ -613,10 +568,10 @@ let skipRequestedStep = false;
 
 function buildLegend() {
   legendEl.innerHTML = `
-    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[0].color.solid}"></div>${CONFIG.units[0].label} parameter family</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[1].color.solid}"></div>${CONFIG.units[1].label} parameter family</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.activationColor.solid}"></div>saved activations</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.gradAccent.solid}"></div>transient/full gradient indicator</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[0].color.solid}"></div>${CONFIG.units[0].label}</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[1].color.solid}"></div>${CONFIG.units[1].label}</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.activationColor.solid}"></div>Activations</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.gradAccent.solid}"></div>Grads</div>
   `;
 }
 
@@ -626,7 +581,7 @@ function createSection(title, capacity, bufferClass = "", slotFactory) {
 
   const label = document.createElement("div");
   label.className = "section-label";
-  label.innerHTML = `<span>${title}</span><span class="capacity">${capacity}</span>`;
+  label.textContent = title;
   section.appendChild(label);
 
   const buffer = document.createElement("div");
@@ -663,7 +618,7 @@ function buildDOM() {
 
     const header = document.createElement("div");
     header.className = "rank-header";
-    header.innerHTML = `<div class="rank-label">Rank ${rank}</div><div class="rank-note">HBM view</div>`;
+    header.innerHTML = `<div class="rank-label">Rank ${rank}</div>`;
     card.appendChild(header);
 
     const grid = document.createElement("div");
@@ -671,13 +626,13 @@ function buildDOM() {
 
     const persistent = document.createElement("div");
     persistent.className = "memory-group persistent";
-    persistent.innerHTML = `<div class="group-title">Persistent Region</div>`;
+    persistent.innerHTML = `<div class="group-title">Persistent </div>`;
 
     const transient = document.createElement("div");
     transient.className = "memory-group transient";
-    transient.innerHTML = `<div class="group-title">Transient Region</div>`;
+    transient.innerHTML = `<div class="group-title">Transient </div>`;
 
-    const shardSection = createSection("Parameter Shards", `${paramsByRank[rank].length} resident`, "", buffer => {
+    const shardSection = createSection("Parameter Shards", "", "", buffer => {
       paramsByRank[rank].forEach(param => {
         const slot = createSlot();
         const unit = CONFIG.units.find(u => u.id === param.unitId);
@@ -690,7 +645,7 @@ function buildDOM() {
     });
     persistent.appendChild(shardSection.section);
 
-    const gradSection = createSection("Gradient Shards", `${paramsByRank[rank].length} after reduce-scatter`, "", buffer => {
+    const gradSection = createSection("Gradient Shards", "", "", buffer => {
       paramsByRank[rank].forEach(param => {
         const slot = createSlot();
         buffer.appendChild(slot);
@@ -700,11 +655,11 @@ function buildDOM() {
     });
     persistent.appendChild(gradSection.section);
 
-    const optSection = createSection("Optimizer State", `${paramsByRank[rank].length} resident`, "", buffer => {
+    const optSection = createSection("Optimizer St.", "", "", buffer => {
       paramsByRank[rank].forEach(param => {
         const slot = createSlot();
         const unit = CONFIG.units.find(u => u.id === param.unitId);
-        const block = appendBlock(slot, `opt ${param.label}`, { bg: unit.color.bg });
+        const block = appendBlock(slot, `o ${param.label}`, { bg: unit.color.bg });
         block.classList.add("small");
         buffer.appendChild(slot);
         optSlotEls[param.id] = slot;
@@ -714,7 +669,7 @@ function buildDOM() {
     });
     persistent.appendChild(optSection.section);
 
-    const modelSection = createSection("Model Buffer", `${maxUnitSize} transient`, "transient-buffer", buffer => {
+    const modelSection = createSection("Model Buffer", "", "transient-buffer", buffer => {
       modelSlots[rank] = [];
       for (let i = 0; i < maxUnitSize; i++) {
         const slot = createSlot();
@@ -725,7 +680,7 @@ function buildDOM() {
     });
     transient.appendChild(modelSection.section);
 
-    const activationSection = createSection("Saved Activations", `${CONFIG.units.length} forward leftovers`, "activation-buffer", buffer => {
+    const activationSection = createSection("Saved Activations", "", "activation-buffer", buffer => {
       activationSlots[rank] = {};
       CONFIG.units.forEach(unit => {
         const slot = createSlot("activation-slot");
@@ -736,7 +691,7 @@ function buildDOM() {
     });
     transient.appendChild(activationSection.section);
 
-    const fullGradSection = createSection("Full Grad Buffer", `${maxUnitSize} transient`, "transient-buffer", buffer => {
+    const fullGradSection = createSection("Full Grad Buffer", "", "transient-buffer", buffer => {
       fullGradSlots[rank] = [];
       for (let i = 0; i < maxUnitSize; i++) {
         const slot = createSlot();
@@ -808,7 +763,7 @@ function setPhaseState(activePhase, stepText) {
 
 function setStatus(title, detail) {
   statusEl.textContent = `${currentStep + 1}/${STEPS.length}  ${title}`;
-  detailEl.textContent = detail;
+  detailEl.textContent = detail || "";
 }
 
 function setComputeCue(parts = []) {
@@ -870,7 +825,7 @@ function fillParamSlot(slot, param, extraClass = "") {
 
 function fillGradSlot(slot, param, full = false) {
   const unit = CONFIG.units.find(u => u.params.some(candidate => candidate.id === param.id));
-  const label = full ? `∇${param.label}` : `∇${param.label}`;
+  const label = `∇${param.label}`;
   const block = appendBlock(slot, label, unit.color, full ? "transient" : "");
   if (full) block.classList.add("small");
   return block;
@@ -1008,11 +963,11 @@ async function animateBackwardCompute(unit) {
     return blocks;
   });
   setComputeCue([
-    { label: "full params", type: "source" },
+    { label: "params", type: "source" },
     { label: "+", type: "arrow" },
-    { label: "saved activations", type: "source" },
-    { label: "->", type: "arrow" },
-    { label: "full grads", type: "result" },
+    { label: "activations", type: "source" },
+    { label: "→", type: "arrow" },
+    { label: "grads", type: "result" },
   ]);
   pulseBlocks(inputBlocks);
   await sleep(DUR.medium);
@@ -1095,11 +1050,11 @@ async function animateOptimizerParamStep() {
   });
   highlightBuffers(buffersToHighlight);
   setComputeCue([
-    { label: "grad shard", type: "source" },
+    { label: "grad", type: "source" },
     { label: "+", type: "arrow" },
-    { label: "optimizer state", type: "source" },
-    { label: "->", type: "arrow" },
-    { label: "updated param shard", type: "result" },
+    { label: "opt state", type: "source" },
+    { label: "→", type: "arrow" },
+    { label: "param", type: "result" },
   ]);
 
   if (mode === "sequential") {
@@ -1151,11 +1106,11 @@ async function animateOptimizerStateStep() {
   });
   highlightBuffers(buffersToHighlight);
   setComputeCue([
-    { label: "grad shard", type: "source" },
+    { label: "grad", type: "source" },
     { label: "+", type: "arrow" },
-    { label: "old optimizer state", type: "source" },
-    { label: "->", type: "arrow" },
-    { label: "updated optimizer state", type: "result" },
+    { label: "opt state", type: "source" },
+    { label: "→", type: "arrow" },
+    { label: "opt state'", type: "result" },
   ]);
 
   const flashOptState = paramId => {
@@ -1197,90 +1152,20 @@ function resetMemoryState() {
 }
 
 const STEPS = [
-  {
-    title: "Forward: all-gather U1",
-    detail: "Each rank materializes the full U1 weights in the transient model buffer while parameter shards remain resident.",
-    before: () => setPhaseState("forward", { forward: "U1 all-gather", backward: "Waiting", optimizer: "Waiting" }),
-    run: () => animateGather(CONFIG.units[0]),
-  },
-  {
-    title: "Forward: compute U1",
-    detail: "Forward compute for U1 runs using the materialized weights. Activations for U1 are retained in HBM for backward.",
-    before: () => setPhaseState("forward", { forward: "U1 compute", backward: "Waiting", optimizer: "Waiting" }),
-    run: () => animateForwardCompute(CONFIG.units[0]),
-  },
-  {
-    title: "Forward: reshard U1",
-    detail: "The full U1 weights are freed from the transient model buffer. Only the original shards and saved activations remain.",
-    before: () => setPhaseState("forward", { forward: "U1 free full params", backward: "Waiting", optimizer: "Waiting" }),
-    run: () => animateReshardAfterForward(CONFIG.units[0]),
-  },
-  {
-    title: "Forward: all-gather U2",
-    detail: "The same pattern repeats for U2. The transient model buffer now expands to the larger 4-parameter unit.",
-    before: () => setPhaseState("forward", { forward: "U2 all-gather", backward: "Waiting", optimizer: "Waiting" }),
-    run: () => animateGather(CONFIG.units[1]),
-  },
-  {
-    title: "Forward: compute U2",
-    detail: "U2 forward runs, and its activations are saved alongside U1's activations in HBM.",
-    before: () => setPhaseState("forward", { forward: "U2 compute", backward: "Waiting", optimizer: "Waiting" }),
-    run: () => animateForwardCompute(CONFIG.units[1]),
-  },
-  {
-    title: "Forward: reshard U2",
-    detail: "The materialized U2 weights are released. Forward is complete, so HBM now holds shards, optimizer state, and activations for U1 and U2.",
-    before: () => setPhaseState("forward", { forward: "Forward done", backward: "U2 next", optimizer: "Waiting" }),
-    run: () => animateReshardAfterForward(CONFIG.units[1]),
-  },
-  {
-    title: "Backward: all-gather U2",
-    detail: "Backward starts from U2. The full U2 weights are materialized again because backward needs the weights as well as saved activations.",
-    before: () => setPhaseState("backward", { forward: "Done", backward: "U2 all-gather", optimizer: "Waiting" }),
-    run: () => animateGather(CONFIG.units[1]),
-  },
-  {
-    title: "Backward: create full grads for U2",
-    detail: "Autograd consumes the saved U2 activations and rematerialized weights, producing transient full gradients that match the full U2 parameter size.",
-    before: () => setPhaseState("backward", { forward: "Done", backward: "U2 full grads", optimizer: "Waiting" }),
-    run: () => animateBackwardCompute(CONFIG.units[1]),
-  },
-  {
-    title: "Backward: reduce-scatter U2",
-    detail: "Reduce-scatter sums gradients across ranks and returns each rank to only its U2 gradient shard. The full U2 weights, full U2 grads, and U2 activations are then freed.",
-    before: () => setPhaseState("backward", { forward: "Done", backward: "U2 grad shards", optimizer: "Waiting" }),
-    run: () => animateReduceScatter(CONFIG.units[1]),
-  },
-  {
-    title: "Backward: all-gather U1",
-    detail: "The backward walk continues to U1. Its full weights are materialized again while U2 gradient shards stay resident.",
-    before: () => setPhaseState("backward", { forward: "Done", backward: "U1 all-gather", optimizer: "Waiting" }),
-    run: () => animateGather(CONFIG.units[0]),
-  },
-  {
-    title: "Backward: create full grads for U1",
-    detail: "Autograd now uses the saved U1 activations plus upstream gradients to create the transient full U1 gradient tensor.",
-    before: () => setPhaseState("backward", { forward: "Done", backward: "U1 full grads", optimizer: "Waiting" }),
-    run: () => animateBackwardCompute(CONFIG.units[0]),
-  },
-  {
-    title: "Backward: reduce-scatter U1",
-    detail: "U1 gradients are reduced and sharded. After this, each rank holds parameter shards, optimizer state, and gradient shards for both units.",
-    before: () => setPhaseState("backward", { forward: "Done", backward: "Backward done", optimizer: "Ready" }),
-    run: () => animateReduceScatter(CONFIG.units[0]),
-  },
-  {
-    title: "Optimizer: update parameter shards",
-    detail: "First, the optimizer uses each local gradient shard together with local optimizer state to update the parameter shard in place. Parameter shards switch to primed labels here.",
-    before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "Update params" }),
-    run: () => animateOptimizerParamStep(),
-  },
-  {
-    title: "Optimizer: update optimizer state",
-    detail: "Next, the optimizer state itself advances using the same local gradient shard. Optimizer-state labels switch to primed labels here, and the gradient shards are then cleared.",
-    before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "Update state" }),
-    run: () => animateOptimizerStateStep(),
-  },
+  { title: "All-gather U1", detail: "", before: () => setPhaseState("forward", { forward: "U1 all-gather", backward: "Waiting", optimizer: "Waiting" }), run: () => animateGather(CONFIG.units[0]) },
+  { title: "Compute U1", detail: "", before: () => setPhaseState("forward", { forward: "U1 compute", backward: "Waiting", optimizer: "Waiting" }), run: () => animateForwardCompute(CONFIG.units[0]) },
+  { title: "Reshard U1", detail: "", before: () => setPhaseState("forward", { forward: "U1 free", backward: "Waiting", optimizer: "Waiting" }), run: () => animateReshardAfterForward(CONFIG.units[0]) },
+  { title: "All-gather U2", detail: "", before: () => setPhaseState("forward", { forward: "U2 all-gather", backward: "Waiting", optimizer: "Waiting" }), run: () => animateGather(CONFIG.units[1]) },
+  { title: "Compute U2", detail: "", before: () => setPhaseState("forward", { forward: "U2 compute", backward: "Waiting", optimizer: "Waiting" }), run: () => animateForwardCompute(CONFIG.units[1]) },
+  { title: "Reshard U2", detail: "", before: () => setPhaseState("forward", { forward: "Fwd done", backward: "U2 next", optimizer: "Waiting" }), run: () => animateReshardAfterForward(CONFIG.units[1]) },
+  { title: "All-gather U2 (bwd)", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U2 all-gather", optimizer: "Waiting" }), run: () => animateGather(CONFIG.units[1]) },
+  { title: "Full grads U2", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U2 grads", optimizer: "Waiting" }), run: () => animateBackwardCompute(CONFIG.units[1]) },
+  { title: "Reduce-scatter U2", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U2 shards", optimizer: "Waiting" }), run: () => animateReduceScatter(CONFIG.units[1]) },
+  { title: "All-gather U1 (bwd)", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U1 all-gather", optimizer: "Waiting" }), run: () => animateGather(CONFIG.units[0]) },
+  { title: "Full grads U1", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U1 grads", optimizer: "Waiting" }), run: () => animateBackwardCompute(CONFIG.units[0]) },
+  { title: "Reduce-scatter U1", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "Bwd done", optimizer: "Ready" }), run: () => animateReduceScatter(CONFIG.units[0]) },
+  { title: "Optimizer: params", detail: "", before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "Params" }), run: () => animateOptimizerParamStep() },
+  { title: "Optimizer: state", detail: "", before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "State" }), run: () => animateOptimizerStateStep() },
 ];
 
 async function executeStep(index) {
@@ -1309,8 +1194,8 @@ async function playAll() {
     currentStep += 1;
     if (currentStep < STEPS.length) await sleep(DUR.medium);
   }
-  statusEl.textContent = "Done";
-  detailEl.textContent = "The iteration finished with updated parameter shards and updated optimizer state shown as primed labels. Gradient shards have been consumed and cleared.";
+  statusEl.textContent = "Done ✓";
+  detailEl.textContent = "";
   setComputeCue([]);
   animating = false;
   refreshControls();
@@ -1352,7 +1237,7 @@ async function stepPrev() {
   }
   if (targetStep < 0) {
     statusEl.textContent = "Ready";
-    detailEl.textContent = "Persistent parameter shards and optimizer state are resident on both ranks. Step through to materialize unit weights into the transient model buffer.";
+    detailEl.textContent = "";
   }
   renderMode = previousRenderMode;
   animating = false;
@@ -1370,7 +1255,7 @@ function reset() {
   currentStep = 0;
   resetMemoryState();
   statusEl.textContent = "Ready";
-  detailEl.textContent = "Persistent parameter shards and optimizer state are resident on both ranks. Step through to materialize unit weights into the transient model buffer.";
+  detailEl.textContent = "";
   refreshControls();
 }
 
