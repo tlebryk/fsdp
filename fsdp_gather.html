@@ -18,37 +18,36 @@
     padding: 40px 20px;
   }
 
-  h1 { font-size: 1.4rem; font-weight: 600; letter-spacing: 0.04em; margin-bottom: 8px; color: #f0f0f0; }
-  .subtitle { font-size: 0.85rem; color: #888; margin-bottom: 32px; }
+  h1 { font-size: 3.5rem; font-weight: 700; letter-spacing: 0.04em; margin-bottom: 28px; color: #f0f0f0; }
 
   #stage {
     position: relative;
     display: flex;
-    gap: 40px;
+    gap: 56px;
     justify-content: center;
   }
 
   .rank {
     display: flex;
     flex-direction: column;
-    gap: 40px;
-    width: 280px;
+    gap: 48px;
+    width: 380px;
   }
 
   .rank-label {
     text-align: center;
-    font-size: 0.95rem;
+    font-size: 2.2rem;
     font-weight: 700;
-    padding: 10px;
+    padding: 14px;
     border-radius: 10px;
     background: #1a1d27;
     border: 1px solid #2a2d3a;
   }
 
-  .buffer-section { display: flex; flex-direction: column; gap: 6px; }
+  .buffer-section { display: flex; flex-direction: column; gap: 12px; }
 
   .buffer-label {
-    font-size: 0.7rem;
+    font-size: 1.5rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -58,25 +57,25 @@
 
   .buffer {
     display: flex;
-    gap: 8px;
-    padding: 12px;
+    gap: 14px;
+    padding: 18px;
     border-radius: 12px;
     background: #161821;
     border: 1px solid #2a2d3a;
-    min-height: 72px;
+    min-height: 110px;
     align-items: center;
     flex-wrap: wrap;
     transition: border-color 0.3s, box-shadow 0.3s;
   }
 
   .param {
-    width: 56px;
-    height: 48px;
+    width: 72px;
+    height: 64px;
     border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.78rem;
+    font-size: 1.6rem;
     font-weight: 700;
     flex-shrink: 0;
     transition: transform 0.2s, box-shadow 0.2s;
@@ -94,13 +93,13 @@
 
   .floater {
     position: absolute;
-    width: 56px;
-    height: 48px;
+    width: 72px;
+    height: 64px;
     border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.78rem;
+    font-size: 1.6rem;
     font-weight: 700;
     color: #fff;
     pointer-events: none;
@@ -108,15 +107,17 @@
   }
 
   .controls {
-    margin-top: 28px;
+    margin-top: 40px;
     display: flex;
-    gap: 12px;
+    gap: 24px;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
   }
 
   button {
     font-family: inherit;
-    font-size: 0.85rem;
+    font-size: 1.6rem;
     font-weight: 600;
     padding: 10px 24px;
     border-radius: 8px;
@@ -130,27 +131,27 @@
   button:disabled { opacity: 0.4; cursor: default; }
   button.active { border-color: #5a6; background: #1e2a1e; }
 
-  .status { font-size: 0.8rem; color: #666; min-width: 200px; text-align: center; }
+  .status { font-size: 1.8rem; color: #888; min-width: 320px; text-align: center; display: flex; align-items: center; justify-content: center; padding: 0 20px; }
+  .status:empty { display: none; }
   .status .unit-name { font-weight: 700; }
 
-  .legend { margin-top: 20px; display: flex; gap: 24px; font-size: 0.75rem; color: #888; }
-  .legend-item { display: flex; align-items: center; gap: 6px; }
-  .legend-swatch { width: 14px; height: 14px; border-radius: 4px; }
+  .legend { margin-top: 36px; display: flex; gap: 40px; font-size: 1.5rem; color: #999; }
+  .legend-item { display: flex; align-items: center; gap: 10px; }
+  .legend-swatch { width: 22px; height: 22px; border-radius: 4px; }
 </style>
 </head>
 <body>
 
 <h1>FSDP All-Gather</h1>
-<p class="subtitle">Parameters float from shard buffers to output buffers during materialization</p>
-
 <div id="stage"></div>
 
 <div class="controls">
   <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
   <button id="btn-step">Step</button>
   <button id="btn-reset">Reset</button>
   <button id="btn-mode">Mode: parallel</button>
-  <div class="status" id="status">Ready</div>
+  <div class="status" id="status"></div>
 </div>
 
 <div class="legend" id="legend"></div>
@@ -219,7 +220,7 @@ function buildDOM() {
     outSection.className = "buffer-section";
     const outLabel = document.createElement("div");
     outLabel.className = "buffer-label";
-    outLabel.textContent = `Output Buffer (${maxUnitSize} params)`;
+    outLabel.textContent = `Output`;
     outSection.appendChild(outLabel);
 
     const outBuf = document.createElement("div");
@@ -241,7 +242,7 @@ function buildDOM() {
     shardSection.className = "buffer-section";
     const shardLabel = document.createElement("div");
     shardLabel.className = "buffer-label";
-    shardLabel.textContent = `Shard Buffer (${shardsPerRank[ri].length} params)`;
+    shardLabel.textContent = `Shards`;
     shardSection.appendChild(shardLabel);
 
     const shardBuf = document.createElement("div");
@@ -273,8 +274,7 @@ function buildDOM() {
     swatch.className = "legend-swatch";
     swatch.style.background = u.color.solid;
     item.appendChild(swatch);
-    const names = u.params.map(p => p.name).join(", ");
-    item.appendChild(document.createTextNode(`${u.label} (${u.params.length} params: ${names})`));
+    item.appendChild(document.createTextNode(u.label));
     legendEl.appendChild(item);
   });
 }
@@ -286,6 +286,25 @@ const PAUSE_MS = 1200;
 let currentStep = 0;
 let animating = false;
 let mode = "parallel"; // "parallel" | "sequential"
+let skipRequestedStep = false;
+
+function scheduleSkippable(callback, ms) {
+  let done = false;
+  let timerId = null;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (timerId !== null) clearTimeout(timerId);
+    callback();
+  };
+  timerId = window.setTimeout(finish, ms);
+  const watchSkip = () => {
+    if (done) return;
+    if (skipRequestedStep) { finish(); return; }
+    requestAnimationFrame(watchSkip);
+  };
+  requestAnimationFrame(watchSkip);
+}
 
 function getPos(el) {
   const sr = stage.getBoundingClientRect();
@@ -313,10 +332,14 @@ function clearOutputs() {
   stage.querySelectorAll(".floater").forEach(f => f.remove());
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms) {
+  if (skipRequestedStep) return Promise.resolve();
+  return new Promise(r => scheduleSkippable(r, ms));
+}
 
 function flyParam(srcEl, dstEl, unit, paramName) {
   return new Promise(resolve => {
+    if (skipRequestedStep) { resolve(); return; }
     const srcPos = getPos(srcEl);
     const dstPos = getPos(dstEl);
 
@@ -339,7 +362,7 @@ function flyParam(srcEl, dstEl, unit, paramName) {
       });
     });
 
-    setTimeout(() => { f.remove(); resolve(); }, FLY_MS + 50);
+    scheduleSkippable(() => { f.remove(); resolve(); }, FLY_MS + 50);
   });
 }
 
@@ -381,7 +404,7 @@ async function animateGatherSequential(unit) {
   clearOutputs();
   highlightBuffers(unit);
   glowSources(unit);
-  statusEl.innerHTML = `All-Gather <span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> — sequential`;
+  statusEl.innerHTML = `All-Gather <span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span>`;
   await sleep(300);
 
   for (let pi = 0; pi < unit.params.length; pi++) {
@@ -403,7 +426,7 @@ async function animateGatherSequential(unit) {
   }
 
   unglowSources(unit);
-  statusEl.innerHTML = `<span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> materialized — ${unit.params.length} params`;
+  statusEl.innerHTML = `<span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> done`;
 }
 
 // Parallel: all source params fly simultaneously (real all-gather)
@@ -411,7 +434,7 @@ async function animateGatherParallel(unit) {
   clearOutputs();
   highlightBuffers(unit);
   glowSources(unit);
-  statusEl.innerHTML = `All-Gather <span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> — parallel`;
+  statusEl.innerHTML = `All-Gather <span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span>`;
   await sleep(300);
 
   // fire every flight at once
@@ -431,7 +454,7 @@ async function animateGatherParallel(unit) {
   });
 
   unglowSources(unit);
-  statusEl.innerHTML = `<span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> materialized — ${unit.params.length} params`;
+  statusEl.innerHTML = `<span class="unit-name" style="color:${unit.color.solid}">${unit.label}</span> done`;
 }
 
 async function animateGather(unit) {
@@ -444,6 +467,7 @@ async function animateGather(unit) {
 
 // ── CONTROLS ────────────────────────────────────────────────────
 const btnPlay = document.getElementById("btn-play");
+const btnPrev = document.getElementById("btn-prev");
 const btnStep = document.getElementById("btn-step");
 const btnReset = document.getElementById("btn-reset");
 const btnMode = document.getElementById("btn-mode");
@@ -451,34 +475,55 @@ const btnMode = document.getElementById("btn-mode");
 function setButtons(disabled) {
   btnPlay.disabled = disabled;
   btnStep.disabled = disabled;
+  btnPrev.disabled = disabled || currentStep === 0;
 }
 
 async function playAll() {
-  if (animating) return;
+  if (animating) { skipRequestedStep = true; return; }
   animating = true;
   setButtons(true);
   currentStep = 0;
 
   for (let i = 0; i < CONFIG.units.length; i++) {
+    skipRequestedStep = false;
     await animateGather(CONFIG.units[i]);
     currentStep = i + 1;
     if (i < CONFIG.units.length - 1) await sleep(PAUSE_MS);
   }
 
-  statusEl.innerHTML += " — done";
+  statusEl.innerHTML += " ✓";
   animating = false;
   setButtons(false);
 }
 
 async function stepOnce() {
-  if (animating) return;
+  if (animating) { skipRequestedStep = true; return; }
   if (currentStep >= CONFIG.units.length) currentStep = 0;
   animating = true;
   setButtons(true);
+  skipRequestedStep = false;
 
   await animateGather(CONFIG.units[currentStep]);
   currentStep++;
+  animating = false;
+  setButtons(false);
+}
 
+async function stepPrev() {
+  if (animating) return;
+  if (currentStep <= 0) { reset(); return; }
+  animating = true;
+  setButtons(true);
+  skipRequestedStep = true;
+  clearOutputs();
+  const targetStep = currentStep - 1;
+  for (let i = 0; i < targetStep; i++) {
+    await animateGather(CONFIG.units[i]);
+  }
+  currentStep = targetStep;
+  skipRequestedStep = false;
+  if (currentStep === 0) statusEl.textContent = "";
+  else statusEl.innerHTML = `<span class="unit-name" style="color:${CONFIG.units[currentStep - 1].color.solid}">${CONFIG.units[currentStep - 1].label}</span> done`;
   animating = false;
   setButtons(false);
 }
@@ -487,15 +532,18 @@ function reset() {
   if (animating) return;
   currentStep = 0;
   clearOutputs();
-  statusEl.textContent = "Ready";
+  statusEl.textContent = "";
+  setButtons(false);
 }
 
 function toggleMode() {
+  if (animating) return;
   mode = mode === "parallel" ? "sequential" : "parallel";
   btnMode.textContent = `Mode: ${mode}`;
 }
 
 btnPlay.addEventListener("click", playAll);
+btnPrev.addEventListener("click", stepPrev);
 btnStep.addEventListener("click", stepOnce);
 btnReset.addEventListener("click", reset);
 btnMode.addEventListener("click", toggleMode);
