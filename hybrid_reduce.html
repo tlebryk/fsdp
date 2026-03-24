@@ -550,7 +550,7 @@ async function animateStage1() {
   }
 
   phase = 1;
-  statusEl.textContent = "Stage 1 ✓";
+  statusEl.textContent = "Reduce-Scatter ✓";
   await sleep(800);
 }
 
@@ -605,7 +605,7 @@ async function animateStage2() {
   }
 
   phase = 2;
-  statusEl.textContent = "Done ✓";
+  statusEl.textContent = "All-Reduce ✓";
 }
 
 function refreshControls() {
@@ -648,7 +648,7 @@ async function stepPrev() {
   await sleep(200);
   await animateStage1();
   phase = 1;
-  statusEl.textContent = "Stage 1 ✓";
+  statusEl.textContent = "Reduce-Scatter ✓";
   skipRequestedStep = false;
   animating = false;
   refreshControls();

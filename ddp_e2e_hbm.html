@@ -391,68 +391,6 @@
   }
   #detail:empty { display: none; }
 
-  .compute-cue {
-    margin-top: 10px;
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-    min-height: 28px;
-  }
-
-  .compute-cue.hidden {
-    display: none;
-  }
-
-  .cue-chip {
-    font-size: 1.3rem;
-    line-height: 1;
-    padding: 7px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    background: rgba(29, 31, 45, 0.7);
-    color: #d7dcef;
-    white-space: nowrap;
-  }
-
-  .cue-chip.arrow {
-    padding: 7px 6px;
-    border: none;
-    background: transparent;
-    color: var(--muted-2);
-  }
-
-  .cue-chip.source {
-    background: rgba(88, 111, 173, 0.18);
-  }
-
-  .cue-chip.result {
-    background: rgba(78, 143, 113, 0.18);
-  }
-
-  .legend {
-    margin-top: 20px;
-    display: flex;
-    gap: 24px;
-    justify-content: center;
-    flex-wrap: wrap;
-    color: var(--muted);
-    font-size: 1.4rem;
-  }
-
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-
-  .legend-swatch {
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-  }
-
   @media (max-width: 980px) {
     .hbm-grid { grid-template-columns: 1fr; }
   }
@@ -523,10 +461,7 @@
 <div class="status-wrap">
   <div id="status">Ready</div>
   <div id="detail"></div>
-  <div id="compute-cue" class="compute-cue hidden"></div>
 </div>
-
-<div class="legend" id="legend"></div>
 
 <script>
 const CONFIG = {
@@ -562,8 +497,6 @@ const TOTAL_PARAMS = CONFIG.units.reduce((sum, unit) => sum + unit.params.length
 const stage = document.getElementById("stage");
 const statusEl = document.getElementById("status");
 const detailEl = document.getElementById("detail");
-const computeCueEl = document.getElementById("compute-cue");
-const legendEl = document.getElementById("legend");
 const phaseTextEls = {
   forward: document.getElementById("phase-forward-step"),
   backward: document.getElementById("phase-backward-step"),
@@ -613,14 +546,6 @@ function scheduleSkippable(callback, ms) {
 let peakCount = 0;
 
 const DUR = { short: 220, medium: 420 };
-
-function buildLegend() {
-  legendEl.innerHTML = `
-    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[0].color.solid}"></div>${CONFIG.units[0].label}</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.units[1].color.solid}"></div>${CONFIG.units[1].label}</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:${CONFIG.activationColor.solid}"></div>Activations</div>
-  `;
-}
 
 function createSlot(slotClass = "") {
   const slot = document.createElement("div");
@@ -730,7 +655,6 @@ function buildDOM() {
     stage.appendChild(card);
   });
 
-  buildLegend();
   updateMeter();
 }
 
@@ -756,28 +680,12 @@ function setStatus(title, detail) {
   detailEl.textContent = detail || "";
 }
 
-function setComputeCue(parts = []) {
-  computeCueEl.innerHTML = "";
-  if (!parts.length) {
-    computeCueEl.classList.add("hidden");
-    return;
-  }
-  computeCueEl.classList.remove("hidden");
-  parts.forEach(part => {
-    const chip = document.createElement("div");
-    chip.className = `cue-chip ${part.type || "source"}`;
-    chip.textContent = part.label;
-    computeCueEl.appendChild(chip);
-  });
-}
-
 function clearSlot(slot) {
   slot.innerHTML = "";
   slot.classList.remove("filled");
 }
 
 function clearHighlights() {
-  setComputeCue([]);
   document.querySelectorAll(".buffer.highlight").forEach(el => el.classList.remove("highlight"));
   document.querySelectorAll(".block.pulse").forEach(el => el.classList.remove("pulse"));
   document.querySelectorAll(".block.updated").forEach(el => el.classList.remove("updated"));
@@ -895,13 +803,6 @@ async function animateBackward(unit) {
       .concat(CONFIG.ranks.map(rank => gradBuffers[rank]))
       .concat(CONFIG.ranks.map(rank => activationBuffers[rank]))
   );
-  setComputeCue([
-    { label: "params", type: "source" },
-    { label: "+", type: "arrow" },
-    { label: "activations", type: "source" },
-    { label: "→", type: "arrow" },
-    { label: "grads", type: "result" },
-  ]);
   pulseUnitParams(unit);
   pulseUnitActivations(unit);
   await sleep(DUR.medium);
@@ -920,13 +821,6 @@ async function animateBackward(unit) {
 
 async function animateOptimizerParams() {
   updateHighlightsAndMeter(CONFIG.ranks.map(rank => paramBuffers[rank]).concat(CONFIG.ranks.map(rank => gradBuffers[rank])).concat(CONFIG.ranks.map(rank => optBuffers[rank])));
-  setComputeCue([
-    { label: "grads", type: "source" },
-    { label: "+", type: "arrow" },
-    { label: "opt state", type: "source" },
-    { label: "→", type: "arrow" },
-    { label: "params", type: "result" },
-  ]);
   await sleep(DUR.medium);
   CONFIG.ranks.forEach(rank => {
     CONFIG.units.forEach(unit => {
@@ -941,13 +835,6 @@ async function animateOptimizerParams() {
 
 async function animateOptimizerState() {
   updateHighlightsAndMeter(CONFIG.ranks.map(rank => gradBuffers[rank]).concat(CONFIG.ranks.map(rank => optBuffers[rank])));
-  setComputeCue([
-    { label: "grads", type: "source" },
-    { label: "+", type: "arrow" },
-    { label: "opt state", type: "source" },
-    { label: "→", type: "arrow" },
-    { label: "opt state'", type: "result" },
-  ]);
   await sleep(DUR.medium);
   CONFIG.ranks.forEach(rank => {
     CONFIG.units.forEach(unit => {
@@ -1009,7 +896,6 @@ async function playAll() {
   }
   statusEl.textContent = "Done ✓";
   detailEl.textContent = "";
-  setComputeCue([]);
   animating = false;
   refreshControls();
 }
