@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP Gradient Accumulation</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #161821;
+    --panel-2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e7e8ec;
+    --muted: #8a8f9f;
+    --muted-2: #616777;
+    --accent: #89a7ff;
+    --persistent: rgba(63,141,110,0.12);
+    --transient: rgba(196,127,95,0.12);
+  }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(105,145,231,0.08), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(212,120,92,0.08), transparent 28%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 18px 48px;
+  }
+
+  h1 { font-size: 3rem; font-weight: 700; letter-spacing: 0.03em; margin-bottom: 6px; }
+
+  .subtitle {
+    font-size: 1.15rem;
+    color: var(--muted);
+    max-width: 900px;
+    text-align: center;
+    margin-bottom: 24px;
+    line-height: 1.55;
+  }
+
+  .mode-panel {
+    width: min(1060px, 100%);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px 20px;
+    background: rgba(18,20,28,0.92);
+    box-shadow: 0 18px 40px rgba(0,0,0,0.24);
+    margin-bottom: 20px;
+  }
+
+  .mode-header {
+    display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px;
+  }
+  .mode-title { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.04em; }
+  .mode-sub { font-size: 0.95rem; color: var(--muted); margin-bottom: 12px; }
+
+  .tag {
+    font-size: 0.8rem; padding: 2px 8px; border-radius: 5px; font-weight: 600;
+  }
+  .tag.mem { background: rgba(107,196,141,0.15); color: #8d8; }
+  .tag.comm { background: rgba(168,123,212,0.15); color: #c8a8e8; }
+
+  .ranks-row {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .rank-card {
+    flex: 1 1 0;
+    min-width: 260px;
+    max-width: 480px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px;
+    background: rgba(26,29,39,0.75);
+  }
+
+  .rank-label {
+    font-size: 1.2rem; font-weight: 700; margin-bottom: 8px;
+    letter-spacing: 0.04em;
+  }
+
+  .section { margin-bottom: 10px; }
+  .section:last-child { margin-bottom: 0; }
+  .section-label { font-size: 0.9rem; color: var(--muted); margin-bottom: 4px; }
+
+  .buffer {
+    min-height: 46px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(15,17,23,0.65);
+    padding: 6px;
+    display: flex; gap: 6px; flex-wrap: wrap; align-content: flex-start;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  }
+  .buffer.transient-buffer { border-style: dashed; background: rgba(15,17,23,0.55); }
+  .buffer.highlight {
+    border-color: #b7c9ff; border-width: 2px;
+    background: rgba(28,34,54,0.82);
+    box-shadow: 0 0 0 2px rgba(137,167,255,0.34), 0 0 28px rgba(137,167,255,0.22);
+  }
+  .buffer.warn-highlight {
+    border-color: #e0a060; border-width: 2px;
+    background: rgba(54,40,28,0.7);
+    box-shadow: 0 0 0 2px rgba(224,160,96,0.3), 0 0 20px rgba(224,160,96,0.15);
+  }
+
+  .comm-badge {
+    text-align: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--accent);
+    padding: 4px 0;
+    margin-bottom: 4px;
+    opacity: 0;
+    transition: opacity 0.35s;
+  }
+  .comm-badge.visible { opacity: 1; }
+  .comm-badge.skipped { color: var(--muted-2); }
+
+  .slot {
+    width: 46px; height: 38px;
+    border-radius: 7px;
+    border: 1px dashed rgba(90,95,110,0.45);
+    background: rgba(29,31,45,0.55);
+    position: relative; overflow: hidden;
+    transition: border-color 0.25s, background 0.25s;
+  }
+  .slot.filled { border-style: solid; background: rgba(255,255,255,0.05); }
+
+  .block {
+    width: 100%; height: 100%;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.9rem; font-weight: 700; color: #fff;
+    border: 1px solid rgba(255,255,255,0.12);
+    transition: transform 0.25s, box-shadow 0.25s;
+  }
+  .block.transient { border-style: dashed; }
+  .block.small { font-size: 0.78rem; }
+  .block.pulse {
+    transform: scale(1.06);
+    box-shadow: 0 0 0 3px rgba(183,201,255,0.72), 0 0 0 7px rgba(137,167,255,0.24);
+  }
+  .block.updated {
+    box-shadow: 0 0 0 3px rgba(136,212,156,0.78), 0 0 0 7px rgba(136,212,156,0.24);
+  }
+
+  .mode-footer {
+    margin-top: 8px;
+    display: flex; align-items: center; gap: 16px;
+    font-size: 0.9rem; color: var(--muted);
+  }
+
+  .controls {
+    display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-bottom: 14px;
+  }
+
+  button {
+    font-family: inherit; font-size: 1.5rem; font-weight: 600;
+    padding: 10px 22px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer;
+    transition: background 0.15s;
+  }
+  button:hover { background: #23273a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+
+  .status-wrap {
+    width: min(1060px, 100%);
+    background: rgba(22,24,33,0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+
+  #status { font-size: 1.7rem; font-weight: 700; margin-bottom: 4px; }
+  #detail { font-size: 1.2rem; color: var(--muted); line-height: 1.5; }
+  #detail:empty { display: none; }
+
+  @media (max-width: 700px) {
+    .ranks-row { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Gradient Accumulation</h1>
+<p class="subtitle">
+  With communication, each micro-batch does a full ReduceScatter across ranks — gradients are reduced to shards immediately.
+  Without communication, full unsharded gradients accumulate locally on each rank, requiring more memory but fewer cross-rank collectives.
+  &nbsp;Paper § 3.3.4.
+</p>
+
+<div id="stage"></div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+</div>
+
+<div class="status-wrap">
+  <div id="status">Ready</div>
+  <div id="detail">Compare 2 micro-batches of gradient accumulation with and without per-micro-batch ReduceScatter across 2 ranks.</div>
+</div>
+
+<script>
+const U_COLOR = { bg: "linear-gradient(135deg, #34b3a4, #2a8f83)", solid: "#2f9d90" };
+const GRAD_COLOR = { bg: "linear-gradient(135deg, #7b86a8, #646e91)", solid: "#6f7a9d" };
+const MODES = ["with", "without"];
+const RANKS = [0, 1];
+const els = {};
+
+function createSlot() {
+  const s = document.createElement("div");
+  s.className = "slot";
+  return s;
+}
+
+function fillSlot(slot, label, bg, extra = "") {
+  slot.innerHTML = "";
+  slot.classList.add("filled");
+  const b = document.createElement("div");
+  b.className = `block ${extra}`.trim();
+  b.textContent = label;
+  b.style.background = bg;
+  slot.appendChild(b);
+  return b;
+}
+
+function clearSlot(slot) { slot.innerHTML = ""; slot.classList.remove("filled"); }
+
+function clearHighlights() {
+  document.querySelectorAll(".buffer.highlight, .buffer.warn-highlight").forEach(b => b.classList.remove("highlight", "warn-highlight"));
+  document.querySelectorAll(".block.pulse, .block.updated").forEach(b => b.classList.remove("pulse", "updated"));
+  document.querySelectorAll(".comm-badge").forEach(b => b.classList.remove("visible"));
+}
+
+function hl(buf, warn) { buf.classList.add(warn ? "warn-highlight" : "highlight"); }
+function pulse(slot) { slot.querySelector(".block")?.classList.add("pulse"); }
+
+function showComm(mode, text, skipped) {
+  const badge = els[mode].commBadge;
+  badge.textContent = text;
+  badge.classList.add("visible");
+  badge.classList.toggle("skipped", !!skipped);
+}
+
+function buildDOM() {
+  const stage = document.getElementById("stage");
+  stage.innerHTML = "";
+
+  MODES.forEach(mode => {
+    const panel = document.createElement("div");
+    panel.className = "mode-panel";
+
+    const isW = mode === "with";
+    const hdr = document.createElement("div"); hdr.className = "mode-header";
+    hdr.innerHTML = `<div class="mode-title">${isW ? "With Communication" : "Without Communication"}</div>
+      <span class="tag ${isW ? "mem" : "comm"}">${isW ? "less memory" : "less comm"}</span>`;
+    panel.appendChild(hdr);
+
+    const sub = document.createElement("div"); sub.className = "mode-sub";
+    sub.textContent = isW ? "ReduceScatter after every micro-batch" : "ReduceScatter only after all micro-batches";
+    panel.appendChild(sub);
+
+    const commBadge = document.createElement("div");
+    commBadge.className = "comm-badge";
+    panel.appendChild(commBadge);
+
+    const ranksRow = document.createElement("div");
+    ranksRow.className = "ranks-row";
+
+    els[mode] = { commBadge, ranks: {} };
+
+    RANKS.forEach(rank => {
+      const card = document.createElement("div");
+      card.className = "rank-card";
+      card.innerHTML = `<div class="rank-label">Rank ${rank}</div>`;
+
+      const r = {};
+
+      // Param shard (persistent)
+      const pSec = document.createElement("div"); pSec.className = "section";
+      pSec.innerHTML = '<div class="section-label">Param Shard</div>';
+      const pBuf = document.createElement("div"); pBuf.className = "buffer";
+      const ps = createSlot();
+      fillSlot(ps, rank === 0 ? "p₀" : "p₁", U_COLOR.bg);
+      pBuf.appendChild(ps);
+      pSec.appendChild(pBuf);
+      card.appendChild(pSec);
+      r.paramBuf = pBuf; r.paramSlot = ps;
+
+      // Model buffer (transient, 2 slots — full params after AllGather)
+      const mSec = document.createElement("div"); mSec.className = "section";
+      mSec.innerHTML = '<div class="section-label">Model Buffer</div>';
+      const mBuf = document.createElement("div"); mBuf.className = "buffer transient-buffer";
+      const ms0 = createSlot(); const ms1 = createSlot();
+      mBuf.appendChild(ms0); mBuf.appendChild(ms1);
+      mSec.appendChild(mBuf);
+      card.appendChild(mSec);
+      r.modelBuf = mBuf; r.modelSlots = [ms0, ms1];
+
+      // Full grad buffer (transient, 2 slots)
+      const fSec = document.createElement("div"); fSec.className = "section";
+      fSec.innerHTML = '<div class="section-label">Full Grads</div>';
+      const fBuf = document.createElement("div"); fBuf.className = "buffer transient-buffer";
+      const fs0 = createSlot(); const fs1 = createSlot();
+      fBuf.appendChild(fs0); fBuf.appendChild(fs1);
+      fSec.appendChild(fBuf);
+      card.appendChild(fSec);
+      r.fullGradBuf = fBuf; r.fullGradSlots = [fs0, fs1];
+
+      // Grad shard (persistent, 1 slot)
+      const gSec = document.createElement("div"); gSec.className = "section";
+      gSec.innerHTML = '<div class="section-label">Grad Shard</div>';
+      const gBuf = document.createElement("div"); gBuf.className = "buffer";
+      const gs = createSlot();
+      gBuf.appendChild(gs);
+      gSec.appendChild(gBuf);
+      card.appendChild(gSec);
+      r.gradBuf = gBuf; r.gradSlot = gs;
+
+      ranksRow.appendChild(card);
+      els[mode].ranks[rank] = r;
+    });
+
+    panel.appendChild(ranksRow);
+
+    const footer = document.createElement("div"); footer.className = "mode-footer";
+    const collLabel = document.createElement("span");
+    collLabel.textContent = "Collectives: 0";
+    footer.appendChild(collLabel);
+    panel.appendChild(footer);
+    els[mode].collLabel = collLabel;
+
+    stage.appendChild(panel);
+  });
+}
+
+function sleep(ms) {
+  if (renderMode === "instant" || skipReq) return Promise.resolve();
+  return new Promise(r => {
+    const t = setTimeout(r, ms);
+    const c = () => { if (skipReq || renderMode === "instant") { clearTimeout(t); r(); return; } requestAnimationFrame(c); };
+    requestAnimationFrame(c);
+  });
+}
+
+function forBothRanks(mode, fn) { RANKS.forEach(rank => fn(els[mode].ranks[rank], rank)); }
+
+const STEPS = [
+  {
+    title: "Micro-batch 1: AllGather",
+    detail: "AllGather across ranks: each rank sends its shard, both receive full params [p₀, p₁] in the model buffer. This is inter-rank communication — identical in both modes.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => {
+        showComm(m, "↔ AllGather (both ranks exchange shards)");
+        forBothRanks(m, (r) => {
+          fillSlot(r.modelSlots[0], "p₀", U_COLOR.bg, "transient");
+          fillSlot(r.modelSlots[1], "p₁", U_COLOR.bg, "transient");
+          hl(r.modelBuf);
+          pulse(r.modelSlots[0]); pulse(r.modelSlots[1]);
+          pulse(r.paramSlot);
+        });
+        els[m].collLabel.textContent = "Collectives: 1";
+      });
+    }
+  },
+  {
+    title: "Micro-batch 1: Backward compute",
+    detail: "Each rank computes gradients locally — no communication. Full (unsharded) gradients [∇p₀, ∇p₁] are produced on each rank.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => {
+        forBothRanks(m, (r) => {
+          fillSlot(r.fullGradSlots[0], "∇p₀", GRAD_COLOR.bg, "transient small");
+          fillSlot(r.fullGradSlots[1], "∇p₁", GRAD_COLOR.bg, "transient small");
+          hl(r.fullGradBuf);
+          hl(r.modelBuf);
+          pulse(r.fullGradSlots[0]); pulse(r.fullGradSlots[1]);
+        });
+      });
+    }
+  },
+  {
+    title: "Micro-batch 1: ReduceScatter?",
+    detail: "With comm: ReduceScatter across ranks — rank 0 gets reduced ∇p₀, rank 1 gets reduced ∇p₁. Full grads freed. Without comm: NO ReduceScatter — full grads stay resident on each rank. This is the key tradeoff: skip the cross-rank collective but pay with memory.",
+    run() {
+      clearHighlights();
+      // With comm: RS across ranks
+      showComm("with", "↔ ReduceScatter (ranks exchange & reduce grads)");
+      forBothRanks("with", (r, rank) => {
+        const label = rank === 0 ? "∇p₀'" : "∇p₁'";
+        fillSlot(r.gradSlot, label, U_COLOR.bg, "small");
+        r.gradSlot.querySelector(".block")?.classList.add("updated");
+        r.fullGradSlots.forEach(clearSlot);
+        r.modelSlots.forEach(clearSlot);
+        hl(r.gradBuf);
+      });
+      els.with.collLabel.textContent = "Collectives: 2";
+
+      // Without comm: skip RS, keep full grads
+      showComm("without", "✗ ReduceScatter skipped — no communication", true);
+      forBothRanks("without", (r) => {
+        hl(r.fullGradBuf, true);
+        pulse(r.fullGradSlots[0]); pulse(r.fullGradSlots[1]);
+        r.modelSlots.forEach(clearSlot);
+      });
+    }
+  },
+  {
+    title: "Micro-batch 2: AllGather",
+    detail: "AllGather again for the second micro-batch. Without comm: full-grad buffer is still occupied from micro-batch 1 — higher transient memory.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => {
+        showComm(m, "↔ AllGather");
+        forBothRanks(m, (r) => {
+          fillSlot(r.modelSlots[0], "p₀", U_COLOR.bg, "transient");
+          fillSlot(r.modelSlots[1], "p₁", U_COLOR.bg, "transient");
+          hl(r.modelBuf);
+          pulse(r.modelSlots[0]); pulse(r.modelSlots[1]);
+        });
+        els[m].collLabel.textContent = m === "with" ? "Collectives: 3" : "Collectives: 2";
+      });
+      forBothRanks("without", (r) => hl(r.fullGradBuf, true));
+    }
+  },
+  {
+    title: "Micro-batch 2: Backward compute",
+    detail: "With comm: new full grads produced (same as MB1). Without comm: gradients accumulate in-place in the existing full-grad buffer — labels become ∇Σ to show accumulated values.",
+    run() {
+      clearHighlights();
+      // With comm: fresh full grads
+      forBothRanks("with", (r) => {
+        fillSlot(r.fullGradSlots[0], "∇p₀", GRAD_COLOR.bg, "transient small");
+        fillSlot(r.fullGradSlots[1], "∇p₁", GRAD_COLOR.bg, "transient small");
+        hl(r.fullGradBuf); hl(r.modelBuf);
+        pulse(r.fullGradSlots[0]); pulse(r.fullGradSlots[1]);
+      });
+
+      // Without comm: accumulate
+      forBothRanks("without", (r) => {
+        fillSlot(r.fullGradSlots[0], "∇p₀Σ", GRAD_COLOR.bg, "transient small");
+        fillSlot(r.fullGradSlots[1], "∇p₁Σ", GRAD_COLOR.bg, "transient small");
+        r.fullGradSlots.forEach(s => s.querySelector(".block")?.classList.add("updated"));
+        hl(r.fullGradBuf, true); hl(r.modelBuf);
+      });
+    }
+  },
+  {
+    title: "Micro-batch 2: ReduceScatter (both modes)",
+    detail: "Both modes ReduceScatter now. With comm: grad shards accumulate (∇' → ∇Σ) — this is the 2nd RS. Without comm: first and only RS of the iteration, finally exchanging gradients across ranks. Same result, different communication patterns.",
+    run() {
+      clearHighlights();
+      // With comm: RS #2
+      showComm("with", "↔ ReduceScatter (2nd this iteration)");
+      forBothRanks("with", (r, rank) => {
+        fillSlot(r.gradSlot, rank === 0 ? "∇p₀Σ" : "∇p₁Σ", U_COLOR.bg, "small");
+        r.gradSlot.querySelector(".block")?.classList.add("updated");
+        r.fullGradSlots.forEach(clearSlot);
+        r.modelSlots.forEach(clearSlot);
+        hl(r.gradBuf);
+      });
+      els.with.collLabel.textContent = "Collectives: 4";
+
+      // Without comm: first and only RS
+      showComm("without", "↔ ReduceScatter (1st and only)");
+      forBothRanks("without", (r, rank) => {
+        fillSlot(r.gradSlot, rank === 0 ? "∇p₀Σ" : "∇p₁Σ", U_COLOR.bg, "small");
+        r.gradSlot.querySelector(".block")?.classList.add("updated");
+        r.fullGradSlots.forEach(clearSlot);
+        r.modelSlots.forEach(clearSlot);
+        hl(r.gradBuf);
+      });
+      els.without.collLabel.textContent = "Collectives: 3";
+    }
+  },
+  {
+    title: "Done — same result, different paths",
+    detail: "Both modes end with identical accumulated gradient shards (∇Σ) — rank 0 has ∇p₀Σ, rank 1 has ∇p₁Σ. With comm used 4 collectives (2 AG + 2 RS) but kept transient memory low between micro-batches. Without comm used 3 collectives (2 AG + 1 RS) but held full gradients on every rank throughout.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => {
+        forBothRanks(m, (r) => {
+          hl(r.gradBuf);
+          r.gradSlot.querySelector(".block")?.classList.add("pulse");
+        });
+      });
+    }
+  },
+];
+
+const statusEl = document.getElementById("status");
+const detailEl = document.getElementById("detail");
+let currentStep = -1;
+let animating = false;
+let skipReq = false;
+let renderMode = "animate";
+
+function executeStep(idx) {
+  STEPS[idx].run();
+  statusEl.textContent = `${idx + 1}/${STEPS.length}  ${STEPS[idx].title}`;
+  detailEl.textContent = STEPS[idx].detail;
+}
+
+function resetAll() {
+  currentStep = -1;
+  clearHighlights();
+  MODES.forEach(m => {
+    forBothRanks(m, (r) => {
+      r.modelSlots.forEach(clearSlot);
+      r.fullGradSlots.forEach(clearSlot);
+      clearSlot(r.gradSlot);
+    });
+    els[m].collLabel.textContent = "Collectives: 0";
+  });
+  statusEl.textContent = "Ready";
+  detailEl.textContent = "Compare 2 micro-batches of gradient accumulation with and without per-micro-batch ReduceScatter across 2 ranks.";
+}
+
+function refreshControls() {
+  document.getElementById("btn-prev").disabled = animating || currentStep <= 0;
+}
+
+async function playAll() {
+  if (animating) { skipReq = true; return; }
+  animating = true; refreshControls();
+  if (currentStep >= STEPS.length - 1) { resetAll(); await sleep(300); }
+  while (currentStep < STEPS.length - 1) { currentStep++; executeStep(currentStep); await sleep(1400); }
+  animating = false; refreshControls();
+}
+
+function stepOnce() {
+  if (animating) { skipReq = true; return; }
+  currentStep++;
+  if (currentStep >= STEPS.length) { resetAll(); refreshControls(); return; }
+  executeStep(currentStep); refreshControls();
+}
+
+function stepPrev() {
+  if (animating || currentStep <= 0) return;
+  const t = currentStep - 1;
+  const old = renderMode; renderMode = "instant";
+  resetAll();
+  for (let i = 0; i <= t; i++) { currentStep = i; executeStep(i); }
+  clearHighlights(); STEPS[t].run();
+  renderMode = old; refreshControls();
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-prev").addEventListener("click", stepPrev);
+document.getElementById("btn-reset").addEventListener("click", () => { if (!animating) { resetAll(); refreshControls(); } });
+
+buildDOM();
+resetAll();
+refreshControls();
+</script>
+</body>
+</html>

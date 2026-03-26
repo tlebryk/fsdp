@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP End-to-End HBM (mixed precision)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #161821;
+    --panel-2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e7e8ec;
+    --muted: #8a8f9f;
+    --muted-2: #616777;
+    --accent: #89a7ff;
+    --persistent: rgba(63, 141, 110, 0.12);
+    --transient: rgba(196, 127, 95, 0.12);
+    --activation: rgba(105, 145, 231, 0.18);
+  }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(105, 145, 231, 0.08), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(212, 120, 92, 0.08), transparent 28%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 18px 48px;
+  }
+
+  h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    margin-bottom: 12px;
+  }
+
+  .page-note {
+    font-size: 1.25rem;
+    color: var(--muted);
+    max-width: 1080px;
+    text-align: center;
+    line-height: 1.45;
+    margin-bottom: 22px;
+  }
+
+  .page-note .tag-fp32 {
+    color: #7dccb0;
+    font-weight: 600;
+  }
+
+  .page-note .tag-fp16 {
+    color: #e8b090;
+    font-weight: 600;
+  }
+
+  .timeline {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .phase-pill {
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(26, 29, 39, 0.92);
+    color: var(--muted);
+    min-width: 132px;
+    text-align: center;
+    transition: border-color 0.25s, box-shadow 0.25s, color 0.25s, background 0.25s;
+  }
+
+  .phase-pill .phase-name {
+    display: block;
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+  }
+
+  .phase-pill .phase-step {
+    font-size: 1.5rem;
+  }
+
+  .phase-pill.active {
+    color: var(--text);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(137, 167, 255, 0.25), 0 14px 28px rgba(0, 0, 0, 0.18);
+    background: rgba(26, 29, 39, 1);
+  }
+
+  .phase-pill.done {
+    color: #cbd3ee;
+    border-color: rgba(137, 167, 255, 0.35);
+  }
+
+  #stage {
+    position: relative;
+    width: min(1180px, 100%);
+    display: flex;
+    gap: 30px;
+    justify-content: center;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .rank-card {
+    width: min(560px, 100%);
+    background: rgba(18, 20, 28, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+    position: relative;
+    z-index: 1;
+  }
+
+  .rank-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    gap: 12px;
+  }
+
+  .rank-label {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .rank-note {
+    font-size: 1.2rem;
+    color: var(--muted-2);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .hbm-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+  }
+
+  .memory-group {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    background: rgba(26, 29, 39, 0.75);
+  }
+
+  .memory-group.persistent { background: linear-gradient(180deg, rgba(63, 141, 110, 0.12), rgba(26, 29, 39, 0.78)); }
+  .memory-group.transient { background: linear-gradient(180deg, rgba(196, 127, 95, 0.12), rgba(26, 29, 39, 0.78)); }
+
+  .group-title {
+    font-size: 1.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: var(--muted);
+  }
+
+  .section {
+    margin-bottom: 18px;
+  }
+
+  .section:last-child { margin-bottom: 0; }
+
+  .section-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 1.4rem;
+    color: var(--muted);
+  }
+
+  .section-label .capacity {
+    color: var(--muted-2);
+    font-size: 1.2rem;
+    letter-spacing: 0.05em;
+  }
+
+  .buffer {
+    position: relative;
+    min-height: 82px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(15, 17, 23, 0.65);
+    padding: 14px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  }
+
+  .buffer.transient-buffer {
+    border-style: dashed;
+    background: rgba(15, 17, 23, 0.55);
+  }
+
+  .buffer.activation-buffer {
+    background: rgba(105, 145, 231, 0.08);
+  }
+
+  .buffer.highlight {
+    border-color: #b7c9ff;
+    border-width: 2px;
+    background: rgba(28, 34, 54, 0.82);
+    box-shadow:
+      0 0 0 2px rgba(137, 167, 255, 0.34),
+      inset 0 0 0 2px rgba(137, 167, 255, 0.2),
+      0 0 34px rgba(137, 167, 255, 0.28);
+  }
+
+  .slot {
+    width: 58px;
+    height: 46px;
+    border-radius: 10px;
+    border: 1px dashed rgba(90, 95, 110, 0.45);
+    background: rgba(29, 31, 45, 0.55);
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, background 0.25s, transform 0.25s, opacity 0.25s, box-shadow 0.25s;
+  }
+
+  .slot.activation-slot {
+    width: calc(50% - 4px);
+    min-width: 118px;
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .slot.filled {
+    border-style: solid;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  /* Transient compute/comm buffers: half memory footprint vs FP32 (paper: K_low vs K_full on unsharded FlatParameter) */
+  .slot.slot-lowprec {
+    width: 29px;
+    height: 23px;
+    border-radius: 7px;
+    border-color: rgba(232, 176, 128, 0.55);
+  }
+
+  .slot.slot-lowprec.filled {
+    background: rgba(255, 200, 150, 0.06);
+  }
+
+  .block.lowprec {
+    display: flex;
+    font-size: 0.65rem;
+    line-height: 1.05;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    padding: 2px;
+    border: 1px dashed rgba(255, 200, 160, 0.65) !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 190, 140, 0.12);
+  }
+
+  .block.lowprec .blk-main {
+    display: block;
+    font-size: 0.68rem;
+    font-weight: 700;
+  }
+
+  .block.lowprec .blk-prec {
+    display: block;
+    font-size: 0.5rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: rgba(255, 235, 210, 0.92);
+    text-transform: uppercase;
+  }
+
+  .block.fp32-master {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-shadow:
+      inset 0 0 0 1px rgba(125, 204, 176, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+
+  .block.fp32-master .blk-main-f {
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+
+  .block.small.fp32-master .blk-main-f {
+    font-size: 1.05rem;
+  }
+
+  .block.fp32-master .blk-prec-f {
+    display: block;
+    font-size: 0.5rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: rgba(200, 240, 220, 0.85);
+    margin-top: 2px;
+    text-transform: uppercase;
+  }
+
+  .block {
+    width: 100%;
+    height: 100%;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    transition: transform 0.25s, box-shadow 0.25s, opacity 0.25s, filter 0.25s;
+  }
+
+  .block.small {
+    font-size: 1.1rem;
+    letter-spacing: 0.02em;
+  }
+
+  .block.transient {
+    border-style: dashed;
+    filter: saturate(0.95);
+  }
+
+  .block.activation {
+    background: linear-gradient(135deg, #5d82db, #4767b7);
+  }
+
+  .block.pulse {
+    transform: scale(1.08);
+    box-shadow:
+      0 0 0 3px rgba(183, 201, 255, 0.72),
+      0 0 0 7px rgba(137, 167, 255, 0.24),
+      0 14px 28px rgba(137, 167, 255, 0.32);
+  }
+
+  .block.updated {
+    box-shadow:
+      0 0 0 3px rgba(136, 212, 156, 0.78),
+      0 0 0 7px rgba(136, 212, 156, 0.24),
+      0 0 34px rgba(136, 212, 156, 0.3);
+  }
+
+  .slot.dimmed .block {
+    opacity: 0.24;
+  }
+
+  .floater {
+    position: absolute;
+    width: 58px;
+    height: 46px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #fff;
+    pointer-events: none;
+    z-index: 20;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .floater.floater-lowprec {
+    width: 29px;
+    height: 23px;
+    border-radius: 7px;
+    font-size: 0.62rem;
+    line-height: 1.05;
+    border-color: rgba(255, 200, 150, 0.45);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+  }
+
+  .controls {
+    margin-top: 26px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 1.6rem;
+    font-weight: 600;
+    padding: 10px 22px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  }
+
+  button:hover {
+    background: #23273a;
+    border-color: #3b3f52;
+  }
+
+  button:disabled {
+    opacity: 0.45;
+    cursor: default;
+    transform: none;
+  }
+
+  .status-wrap {
+    margin-top: 18px;
+    width: min(980px, 100%);
+    background: rgba(22, 24, 33, 0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+
+  #status {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  #detail {
+    font-size: 1.3rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  #detail:empty { display: none; }
+
+  @media (max-width: 980px) {
+    .hbm-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 620px) {
+    body { padding: 26px 12px 36px; }
+    .slot { width: 52px; }
+    .slot.slot-lowprec { width: 26px; height: 20px; }
+    .floater { width: 52px; }
+    .floater.floater-lowprec { width: 26px; height: 20px; font-size: 0.55rem; }
+    .slot.activation-slot {
+      width: 100%;
+      min-width: 0;
+      flex-basis: 100%;
+    }
+  }
+</style>
+</head>
+<body>
+
+<h1>FSDP End-to-End HBM (mixed precision)</h1>
+<p class="page-note">Same timeline as the FP32-only demo: resident sharded <span class="tag-fp32">FlatParameter</span>, materialized <span class="tag-fp32">∇ shards</span>, and <span class="tag-fp32">optimizer state</span> stay full precision. Only the <em>dynamically allocated</em> unsharded tensor and full-gradient workspace use <span class="tag-fp16">FP16/BF16</span>—half the slot size here—matching the paper’s peak-memory <span class="tag-fp16">K<sub>low</sub></span> term and low-precision collectives.</p>
+<div class="timeline">
+  <div class="phase-pill" id="phase-forward">
+    <span class="phase-name">Forward</span>
+    <span class="phase-step" id="phase-forward-step">Awaiting U1</span>
+  </div>
+  <div class="phase-pill" id="phase-backward">
+    <span class="phase-name">Backward</span>
+    <span class="phase-step" id="phase-backward-step">Waiting</span>
+  </div>
+  <div class="phase-pill" id="phase-optimizer">
+    <span class="phase-name">Optimizer</span>
+    <span class="phase-step" id="phase-optimizer-step">Waiting</span>
+  </div>
+</div>
+
+<div id="stage"></div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+  <button id="btn-mode">Mode: sequential</button>
+</div>
+
+<div class="status-wrap">
+  <div id="status">Ready</div>
+  <div id="detail"></div>
+</div>
+
+<script>
+const CONFIG = {
+  ranks: [0, 1],
+  units: [
+    {
+      id: "u1",
+      label: "U1",
+      activationLabel: "act U1",
+      color: {
+        bg: "linear-gradient(135deg, #34b3a4, #2a8f83)",
+        solid: "#2f9d90",
+        glow: "rgba(47,157,144,0.36)",
+        soft: "rgba(47,157,144,0.14)",
+      },
+      params: [
+        { id: "p0", label: "p0", rank: 0 },
+        { id: "p1", label: "p1", rank: 1 },
+      ],
+    },
+    {
+      id: "u2",
+      label: "U2",
+      activationLabel: "act U2",
+      color: {
+        bg: "linear-gradient(135deg, #d4785c, #b8604a)",
+        solid: "#c96f4f",
+        glow: "rgba(201,111,79,0.34)",
+        soft: "rgba(201,111,79,0.14)",
+      },
+      params: [
+        { id: "p2", label: "p2", rank: 0 },
+        { id: "p3", label: "p3", rank: 0 },
+        { id: "p4", label: "p4", rank: 1 },
+        { id: "p5", label: "p5", rank: 1 },
+      ],
+    },
+  ],
+  activationColor: {
+    bg: "linear-gradient(135deg, #5d82db, #4767b7)",
+    solid: "#5678cc",
+    glow: "rgba(93,130,219,0.3)",
+  },
+  gradAccent: {
+    bg: "linear-gradient(135deg, #7b86a8, #646e91)",
+    solid: "#6f7a9d",
+    glow: "rgba(111,122,157,0.24)",
+  },
+};
+
+const maxUnitSize = Math.max(...CONFIG.units.map(unit => unit.params.length));
+const paramsByRank = {};
+CONFIG.ranks.forEach(rank => {
+  paramsByRank[rank] = CONFIG.units.flatMap(unit =>
+    unit.params.filter(param => param.rank === rank).map(param => ({ ...param, unitId: unit.id }))
+  );
+});
+
+const stage = document.getElementById("stage");
+const statusEl = document.getElementById("status");
+const detailEl = document.getElementById("detail");
+
+const paramSlotEls = {};
+const paramBlockEls = {};
+const paramBuffers = {};
+const modelSlots = {};
+const modelBuffers = {};
+const activationSlots = {};
+const activationBuffers = {};
+const fullGradSlots = {};
+const fullGradBuffers = {};
+const gradSlots = {};
+const gradBuffers = {};
+const optSlotEls = {};
+const optBlockEls = {};
+const optBuffers = {};
+const phaseEls = {
+  forward: document.getElementById("phase-forward"),
+  backward: document.getElementById("phase-backward"),
+  optimizer: document.getElementById("phase-optimizer"),
+};
+const phaseTextEls = {
+  forward: document.getElementById("phase-forward-step"),
+  backward: document.getElementById("phase-backward-step"),
+  optimizer: document.getElementById("phase-optimizer-step"),
+};
+
+const DUR = {
+  fly: 850,
+  short: 220,
+  medium: 420,
+};
+
+let currentStep = 0;
+let animating = false;
+let mode = "sequential";
+let renderMode = "animate";
+let skipRequestedStep = false;
+
+function createSection(title, capacity, bufferClass = "", slotFactory) {
+  const section = document.createElement("div");
+  section.className = "section";
+
+  const label = document.createElement("div");
+  label.className = "section-label";
+  label.textContent = title;
+  section.appendChild(label);
+
+  const buffer = document.createElement("div");
+  buffer.className = `buffer ${bufferClass}`.trim();
+  section.appendChild(buffer);
+
+  slotFactory(buffer);
+  return { section, buffer };
+}
+
+function createSlot(slotClass = "") {
+  const slot = document.createElement("div");
+  slot.className = `slot ${slotClass}`.trim();
+  return slot;
+}
+
+function appendBlock(slot, label, style, extraClass = "", { lowPrec = false, fp32Master = false } = {}) {
+  slot.innerHTML = "";
+  slot.classList.add("filled");
+  const block = document.createElement("div");
+  block.className = `block ${extraClass}`.trim();
+  block.style.background = style.bg;
+  if (lowPrec) {
+    block.classList.add("lowprec");
+    block.innerHTML = `<span class="blk-main">${label}</span><span class="blk-prec">FP16</span>`;
+  } else if (fp32Master) {
+    block.classList.add("fp32-master");
+    block.innerHTML = `<span class="blk-main-f">${label}</span><span class="blk-prec-f">FP32</span>`;
+  } else {
+    block.textContent = label;
+  }
+  slot.appendChild(block);
+  return block;
+}
+
+function buildDOM() {
+  stage.innerHTML = "";
+
+  CONFIG.ranks.forEach(rank => {
+    const card = document.createElement("div");
+    card.className = "rank-card";
+
+    const header = document.createElement("div");
+    header.className = "rank-header";
+    header.innerHTML = `<div class="rank-label">Rank ${rank}</div>`;
+    card.appendChild(header);
+
+    const grid = document.createElement("div");
+    grid.className = "hbm-grid";
+
+    const persistent = document.createElement("div");
+    persistent.className = "memory-group persistent";
+    persistent.innerHTML = `<div class="group-title">Persistent (FP32)</div>`;
+
+    const transient = document.createElement("div");
+    transient.className = "memory-group transient";
+    transient.innerHTML = `<div class="group-title">Transient (FP16/BF16)</div>`;
+
+    const shardSection = createSection("Parameter shards", "", "", buffer => {
+      paramsByRank[rank].forEach(param => {
+        const slot = createSlot();
+        const unit = CONFIG.units.find(u => u.id === param.unitId);
+        const block = appendBlock(slot, param.label, unit.color, "", { fp32Master: true });
+        buffer.appendChild(slot);
+        paramSlotEls[param.id] = slot;
+        paramBlockEls[param.id] = block;
+      });
+      paramBuffers[rank] = buffer;
+    });
+    persistent.appendChild(shardSection.section);
+
+    const gradSection = createSection("Gradient shards (after RS)", "", "", buffer => {
+      paramsByRank[rank].forEach(param => {
+        const slot = createSlot();
+        buffer.appendChild(slot);
+        gradSlots[param.id] = slot;
+      });
+      gradBuffers[rank] = buffer;
+    });
+    persistent.appendChild(gradSection.section);
+
+    const optSection = createSection("Optimizer state", "", "", buffer => {
+      paramsByRank[rank].forEach(param => {
+        const slot = createSlot();
+        const unit = CONFIG.units.find(u => u.id === param.unitId);
+        const block = appendBlock(slot, `o ${param.label}`, { bg: unit.color.bg }, "small", { fp32Master: true });
+        buffer.appendChild(slot);
+        optSlotEls[param.id] = slot;
+        optBlockEls[param.id] = block;
+      });
+      optBuffers[rank] = buffer;
+    });
+    persistent.appendChild(optSection.section);
+
+    const modelSection = createSection("Model buffer (gathered)", "", "transient-buffer", buffer => {
+      modelSlots[rank] = [];
+      for (let i = 0; i < maxUnitSize; i++) {
+        const slot = createSlot("slot-lowprec");
+        buffer.appendChild(slot);
+        modelSlots[rank].push(slot);
+      }
+      modelBuffers[rank] = buffer;
+    });
+    transient.appendChild(modelSection.section);
+
+    const activationSection = createSection("Saved Activations", "", "activation-buffer", buffer => {
+      activationSlots[rank] = {};
+      CONFIG.units.forEach(unit => {
+        const slot = createSlot("activation-slot");
+        buffer.appendChild(slot);
+        activationSlots[rank][unit.id] = slot;
+      });
+      activationBuffers[rank] = buffer;
+    });
+    transient.appendChild(activationSection.section);
+
+    const fullGradSection = createSection("Full ∇ buffer (pre–reduce-scatter)", "", "transient-buffer", buffer => {
+      fullGradSlots[rank] = [];
+      for (let i = 0; i < maxUnitSize; i++) {
+        const slot = createSlot("slot-lowprec");
+        buffer.appendChild(slot);
+        fullGradSlots[rank].push(slot);
+      }
+      fullGradBuffers[rank] = buffer;
+    });
+    transient.appendChild(fullGradSection.section);
+
+    grid.appendChild(persistent);
+    grid.appendChild(transient);
+    card.appendChild(grid);
+    stage.appendChild(card);
+  });
+
+}
+
+function sleep(ms) {
+  if (renderMode === "instant" || skipRequestedStep) return Promise.resolve();
+  return new Promise(resolve => scheduleSkippable(resolve, ms));
+}
+
+function getPos(el) {
+  const sr = stage.getBoundingClientRect();
+  const rect = el.getBoundingClientRect();
+  return {
+    x: rect.left - sr.left,
+    y: rect.top - sr.top,
+  };
+}
+
+function scheduleSkippable(callback, ms) {
+  let done = false;
+  let timerId = null;
+
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (timerId !== null) clearTimeout(timerId);
+    callback();
+  };
+
+  timerId = window.setTimeout(finish, ms);
+
+  const watchSkip = () => {
+    if (done) return;
+    if (skipRequestedStep || renderMode === "instant") {
+      finish();
+      return;
+    }
+    requestAnimationFrame(watchSkip);
+  };
+  requestAnimationFrame(watchSkip);
+}
+
+function setPhaseState(activePhase, stepText) {
+  const forwardDone = activePhase === "backward" || activePhase === "optimizer";
+  const backwardDone = activePhase === "optimizer";
+  Object.entries(phaseEls).forEach(([phase, el]) => {
+    el.classList.toggle("active", phase === activePhase);
+    el.classList.toggle("done", (phase === "forward" && forwardDone) || (phase === "backward" && backwardDone));
+  });
+  if (stepText.forward) phaseTextEls.forward.textContent = stepText.forward;
+  if (stepText.backward) phaseTextEls.backward.textContent = stepText.backward;
+  if (stepText.optimizer) phaseTextEls.optimizer.textContent = stepText.optimizer;
+}
+
+function setStatus(title, detail) {
+  statusEl.textContent = `${currentStep + 1}/${STEPS.length}  ${title}`;
+  detailEl.textContent = detail || "";
+}
+
+function highlightBuffers(buffers) {
+  buffers.forEach(buffer => buffer.classList.add("highlight"));
+}
+
+function clearHighlights() {
+  document.querySelectorAll(".buffer.highlight").forEach(buffer => buffer.classList.remove("highlight"));
+  document.querySelectorAll(".block.pulse").forEach(block => block.classList.remove("pulse"));
+  document.querySelectorAll(".block.updated").forEach(block => block.classList.remove("updated"));
+  document.querySelectorAll(".slot.dimmed").forEach(slot => slot.classList.remove("dimmed"));
+}
+
+function clearSlot(slot) {
+  slot.innerHTML = "";
+  slot.classList.remove("filled", "dimmed");
+}
+
+function clearSlots(slotList) {
+  slotList.forEach(clearSlot);
+}
+
+function rebuildMasterParamBlock(paramId, labelText) {
+  const { param, unit } = getParamMeta(paramId);
+  const slot = paramSlotEls[paramId];
+  paramBlockEls[paramId] = appendBlock(slot, labelText, unit.color, "", { fp32Master: true });
+}
+
+function rebuildMasterOptBlock(paramId, labelText) {
+  const { param, unit } = getParamMeta(paramId);
+  const slot = optSlotEls[paramId];
+  optBlockEls[paramId] = appendBlock(slot, labelText, { bg: unit.color.bg }, "small", { fp32Master: true });
+}
+
+function resetPersistentLabels() {
+  Object.entries(paramSlotEls).forEach(([paramId, slot]) => {
+    const { param, unit } = getParamMeta(paramId);
+    paramBlockEls[paramId] = appendBlock(slot, param.label, unit.color, "", { fp32Master: true });
+    paramBlockEls[paramId].classList.remove("updated");
+  });
+  Object.entries(optSlotEls).forEach(([paramId, slot]) => {
+    const { param, unit } = getParamMeta(paramId);
+    optBlockEls[paramId] = appendBlock(slot, `o ${param.label}`, { bg: unit.color.bg }, "small", { fp32Master: true });
+  });
+}
+
+function fillParamSlot(slot, param, extraClass = "") {
+  const unit = CONFIG.units.find(u => u.params.some(candidate => candidate.id === param.id));
+  const lowPrec = extraClass.split(/\s+/).includes("transient");
+  return appendBlock(slot, param.label, unit.color, extraClass, { lowPrec });
+}
+
+function fillGradSlot(slot, param, full = false) {
+  const unit = CONFIG.units.find(u => u.params.some(candidate => candidate.id === param.id));
+  const label = `∇${param.label}`;
+  if (full) {
+    return appendBlock(slot, label, unit.color, "transient", { lowPrec: true });
+  }
+  return appendBlock(slot, label, unit.color, "", { fp32Master: true });
+}
+
+function fillActivationSlot(slot, unit) {
+  return appendBlock(slot, unit.activationLabel, CONFIG.activationColor, "activation small");
+}
+
+function createFloaterFromBlock(text, bg, srcEl, transient = false, lowPrec = false) {
+  const floater = document.createElement("div");
+  floater.className = "floater" + (lowPrec ? " floater-lowprec" : "");
+  floater.textContent = text;
+  floater.style.background = bg;
+  if (transient || lowPrec) floater.style.borderStyle = "dashed";
+  const pos = getPos(srcEl);
+  floater.style.left = `${pos.x}px`;
+  floater.style.top = `${pos.y}px`;
+  stage.appendChild(floater);
+  return floater;
+}
+
+function flyElement(srcEl, dstEl, text, bg, { transient = false, dimSource = false, onArrive = null, lowPrec = false } = {}) {
+  return new Promise(resolve => {
+    if (dimSource) srcEl.classList.add("dimmed");
+    if (renderMode === "instant" || skipRequestedStep) {
+      if (onArrive) onArrive();
+      resolve();
+      return;
+    }
+    const floater = createFloaterFromBlock(text, bg, srcEl, transient, lowPrec);
+    const dstPos = getPos(dstEl);
+    floater.style.transition = `left ${DUR.fly}ms cubic-bezier(0.25,0.8,0.25,1), top ${DUR.fly}ms cubic-bezier(0.25,0.8,0.25,1), opacity 150ms ease`;
+    floater.style.opacity = "0";
+    requestAnimationFrame(() => {
+      floater.style.opacity = "1";
+      requestAnimationFrame(() => {
+        floater.style.left = `${dstPos.x}px`;
+        floater.style.top = `${dstPos.y}px`;
+      });
+    });
+    scheduleSkippable(() => {
+      if (onArrive) onArrive();
+      floater.remove();
+      resolve();
+    }, DUR.fly + 50);
+  });
+}
+
+function pulseBlocks(blocks) {
+  blocks.filter(Boolean).forEach(block => block.classList.add("pulse"));
+}
+
+function getUnitForParam(paramId) {
+  return CONFIG.units.find(unit => unit.params.some(param => param.id === paramId));
+}
+
+function getParamMeta(paramId) {
+  for (const unit of CONFIG.units) {
+    const match = unit.params.find(param => param.id === paramId);
+    if (match) return { param: match, unit };
+  }
+  return null;
+}
+
+async function animateGather(unit) {
+  clearHighlights();
+  CONFIG.ranks.forEach(rank => clearSlots(modelSlots[rank]));
+  highlightBuffers(CONFIG.ranks.map(rank => modelBuffers[rank]));
+  pulseBlocks(unit.params.map(param => paramBlockEls[param.id]));
+
+  const tasks = [];
+  const runFlight = async param => {
+    const srcSlot = paramSlotEls[param.id];
+    for (const rank of CONFIG.ranks) {
+      const dstSlot = modelSlots[rank][unit.params.findIndex(candidate => candidate.id === param.id)];
+      await flyElement(srcSlot, dstSlot, param.label, unit.color.bg, {
+        lowPrec: true,
+        onArrive: () => fillParamSlot(dstSlot, param, "transient"),
+      });
+    }
+  };
+
+  if (mode === "sequential") {
+    for (const param of unit.params) {
+      await runFlight(param);
+    }
+  } else {
+    unit.params.forEach(param => {
+      CONFIG.ranks.forEach(rank => {
+        const dstSlot = modelSlots[rank][unit.params.findIndex(candidate => candidate.id === param.id)];
+        tasks.push(flyElement(paramSlotEls[param.id], dstSlot, param.label, unit.color.bg, {
+          lowPrec: true,
+          onArrive: () => fillParamSlot(dstSlot, param, "transient"),
+        }));
+      });
+    });
+    await Promise.all(tasks);
+  }
+}
+
+async function animateForwardCompute(unit) {
+  clearHighlights();
+  highlightBuffers(CONFIG.ranks.map(rank => modelBuffers[rank]).concat(CONFIG.ranks.map(rank => activationBuffers[rank])));
+  const modelBlocks = CONFIG.ranks.flatMap(rank =>
+    unit.params.map((_, index) => modelSlots[rank][index].querySelector(".block"))
+  );
+  pulseBlocks(modelBlocks);
+  await sleep(DUR.medium);
+  CONFIG.ranks.forEach(rank => fillActivationSlot(activationSlots[rank][unit.id], unit));
+  pulseBlocks(CONFIG.ranks.map(rank => activationSlots[rank][unit.id].querySelector(".block")));
+  await sleep(DUR.short);
+}
+
+async function animateBackwardCompute(unit) {
+  clearHighlights();
+  CONFIG.ranks.forEach(rank => clearSlots(fullGradSlots[rank]));
+  highlightBuffers(
+    CONFIG.ranks.map(rank => modelBuffers[rank])
+      .concat(CONFIG.ranks.map(rank => activationBuffers[rank]))
+      .concat(CONFIG.ranks.map(rank => fullGradBuffers[rank]))
+  );
+
+  const inputBlocks = CONFIG.ranks.flatMap(rank => {
+    const blocks = [activationSlots[rank][unit.id].querySelector(".block")];
+    unit.params.forEach((_, index) => blocks.push(modelSlots[rank][index].querySelector(".block")));
+    return blocks;
+  });
+  pulseBlocks(inputBlocks);
+  await sleep(DUR.medium);
+
+  CONFIG.ranks.forEach(rank => {
+    unit.params.forEach((param, index) => {
+      fillGradSlot(fullGradSlots[rank][index], param, true);
+    });
+  });
+  pulseBlocks(CONFIG.ranks.flatMap(rank =>
+    unit.params.map((_, index) => fullGradSlots[rank][index].querySelector(".block"))
+  ));
+  await sleep(DUR.short);
+}
+
+async function animateReduceScatter(unit) {
+  clearHighlights();
+  highlightBuffers(CONFIG.ranks.map(rank => fullGradBuffers[rank]).concat(CONFIG.ranks.map(rank => gradBuffers[rank])));
+
+  const getDestSlot = paramId => gradSlots[paramId];
+
+  if (mode === "sequential") {
+    for (const param of unit.params) {
+      const flights = CONFIG.ranks.map(rank =>
+        flyElement(
+          fullGradSlots[rank][unit.params.findIndex(candidate => candidate.id === param.id)],
+          getDestSlot(param.id),
+          `∇${param.label}`,
+          getUnitForParam(param.id).color.bg,
+          {
+            transient: true,
+            lowPrec: true,
+            dimSource: true,
+            onArrive: () => fillGradSlot(getDestSlot(param.id), param, false),
+          }
+        )
+      );
+      await Promise.all(flights);
+    }
+  } else {
+    const tasks = [];
+    unit.params.forEach(param => {
+      CONFIG.ranks.forEach(rank => {
+        tasks.push(
+          flyElement(
+            fullGradSlots[rank][unit.params.findIndex(candidate => candidate.id === param.id)],
+            getDestSlot(param.id),
+            `∇${param.label}`,
+            getUnitForParam(param.id).color.bg,
+            {
+              transient: true,
+              lowPrec: true,
+              dimSource: true,
+              onArrive: () => fillGradSlot(getDestSlot(param.id), param, false),
+            }
+          )
+        );
+      });
+    });
+    await Promise.all(tasks);
+  }
+
+  await sleep(DUR.short);
+  CONFIG.ranks.forEach(rank => {
+    clearSlots(fullGradSlots[rank]);
+    clearSlots(modelSlots[rank]);
+    clearSlot(activationSlots[rank][unit.id]);
+  });
+}
+
+async function animateOptimizerParamStep() {
+  clearHighlights();
+  const liveGradIds = Object.entries(gradSlots)
+    .filter(([, slot]) => slot.classList.contains("filled"))
+    .map(([paramId]) => paramId);
+
+  const buffersToHighlight = [];
+  CONFIG.ranks.forEach(rank => {
+    buffersToHighlight.push(gradBuffers[rank]);
+    buffersToHighlight.push(paramBuffers[rank]);
+    buffersToHighlight.push(optBuffers[rank]);
+  });
+  highlightBuffers(buffersToHighlight);
+
+  if (mode === "sequential") {
+    for (const paramId of liveGradIds) {
+      const { param, unit } = getParamMeta(paramId);
+      const gradSlot = gradSlots[paramId];
+      const paramSlot = paramSlotEls[paramId];
+      optBlockEls[paramId].classList.add("pulse");
+      await flyElement(gradSlot, paramSlot, `upd ${param.label}`, unit.color.bg, {
+        transient: true,
+        dimSource: true,
+        onArrive: () => {
+          rebuildMasterParamBlock(paramId, `${param.label}'`);
+          paramBlockEls[paramId].classList.add("updated");
+        },
+      });
+      await sleep(120);
+    }
+  } else {
+    const tasks = [];
+    liveGradIds.forEach(paramId => {
+      const { param, unit } = getParamMeta(paramId);
+      optBlockEls[paramId].classList.add("pulse");
+      tasks.push(flyElement(gradSlots[paramId], paramSlotEls[paramId], `upd ${param.label}`, unit.color.bg, {
+        transient: true,
+        dimSource: true,
+        onArrive: () => {
+          rebuildMasterParamBlock(paramId, `${param.label}'`);
+          paramBlockEls[paramId].classList.add("updated");
+        },
+      }));
+    });
+    await Promise.all(tasks);
+  }
+
+  await sleep(DUR.medium);
+  liveGradIds.forEach(paramId => clearSlot(gradSlots[paramId]));
+}
+
+async function animateOptimizerStateStep() {
+  clearHighlights();
+  const liveGradIds = Object.entries(gradSlots)
+    .filter(([, slot]) => slot.classList.contains("filled"))
+    .map(([paramId]) => paramId);
+
+  const buffersToHighlight = [];
+  CONFIG.ranks.forEach(rank => {
+    buffersToHighlight.push(gradBuffers[rank]);
+    buffersToHighlight.push(optBuffers[rank]);
+  });
+  highlightBuffers(buffersToHighlight);
+
+  const updateOptState = paramId => {
+    const { param } = getParamMeta(paramId);
+    rebuildMasterOptBlock(paramId, `o ${param.label}'`);
+    optBlockEls[paramId].classList.add("updated", "pulse");
+  };
+
+  if (mode === "sequential") {
+    for (const paramId of liveGradIds) {
+      const { param, unit } = getParamMeta(paramId);
+      const gradSlot = gradSlots[paramId];
+      const optSlot = optSlotEls[paramId];
+      optBlockEls[paramId].classList.add("pulse");
+      await flyElement(gradSlot, optSlot, `∇${param.label}`, unit.color.bg, {
+        transient: true,
+        dimSource: true,
+        onArrive: () => updateOptState(paramId),
+      });
+      await sleep(120);
+    }
+  } else {
+    const tasks = [];
+    liveGradIds.forEach(paramId => {
+      const { param, unit } = getParamMeta(paramId);
+      optBlockEls[paramId].classList.add("pulse");
+      tasks.push(flyElement(gradSlots[paramId], optSlotEls[paramId], `∇${param.label}`, unit.color.bg, {
+        transient: true,
+        dimSource: true,
+        onArrive: () => updateOptState(paramId),
+      }));
+    });
+    await Promise.all(tasks);
+  }
+
+  await sleep(DUR.medium);
+}
+
+function resetMemoryState() {
+  clearHighlights();
+  resetPersistentLabels();
+  CONFIG.ranks.forEach(rank => {
+    clearSlots(modelSlots[rank]);
+    clearSlots(fullGradSlots[rank]);
+    CONFIG.units.forEach(unit => clearSlot(activationSlots[rank][unit.id]));
+  });
+  Object.values(gradSlots).forEach(clearSlot);
+  phaseEls.forward.classList.remove("active", "done");
+  phaseEls.backward.classList.remove("active", "done");
+  phaseEls.optimizer.classList.remove("active", "done");
+  phaseTextEls.forward.textContent = "Awaiting U1";
+  phaseTextEls.backward.textContent = "Waiting";
+  phaseTextEls.optimizer.textContent = "Waiting";
+}
+
+const STEPS = [
+  { title: "All-gather U1", detail: "", before: () => setPhaseState("forward", { forward: "U1 all-gather", backward: "Waiting", optimizer: "Waiting" }), run: () => animateGather(CONFIG.units[0]) },
+  { title: "Compute U1", detail: "", before: () => setPhaseState("forward", { forward: "U1 compute", backward: "Waiting", optimizer: "Waiting" }), run: () => animateForwardCompute(CONFIG.units[0]) },
+  { title: "All-gather U2", detail: "", before: () => setPhaseState("forward", { forward: "U2 all-gather", backward: "Waiting", optimizer: "Waiting" }), run: () => animateGather(CONFIG.units[1]) },
+  { title: "Compute U2", detail: "", before: () => setPhaseState("forward", { forward: "Fwd done", backward: "U2 next", optimizer: "Waiting" }), run: () => animateForwardCompute(CONFIG.units[1]) },
+  { title: "All-gather U2 (bwd)", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U2 all-gather", optimizer: "Waiting" }), run: () => animateGather(CONFIG.units[1]) },
+  { title: "Full grads U2", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U2 grads", optimizer: "Waiting" }), run: () => animateBackwardCompute(CONFIG.units[1]) },
+  { title: "Reduce-scatter U2", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U2 shards", optimizer: "Waiting" }), run: () => animateReduceScatter(CONFIG.units[1]) },
+  { title: "All-gather U1 (bwd)", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U1 all-gather", optimizer: "Waiting" }), run: () => animateGather(CONFIG.units[0]) },
+  { title: "Full grads U1", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "U1 grads", optimizer: "Waiting" }), run: () => animateBackwardCompute(CONFIG.units[0]) },
+  { title: "Reduce-scatter U1", detail: "", before: () => setPhaseState("backward", { forward: "Done", backward: "Bwd done", optimizer: "Ready" }), run: () => animateReduceScatter(CONFIG.units[0]) },
+  { title: "Optimizer: state", detail: "", before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "State" }), run: () => animateOptimizerStateStep() },
+  { title: "Optimizer: params", detail: "", before: () => setPhaseState("optimizer", { forward: "Done", backward: "Done", optimizer: "Params" }), run: () => animateOptimizerParamStep() },
+];
+
+async function executeStep(index) {
+  const step = STEPS[index];
+  skipRequestedStep = false;
+  step.before();
+  setStatus(step.title, step.detail);
+  await step.run();
+  skipRequestedStep = false;
+  if (renderMode === "instant") clearHighlights();
+}
+
+async function playAll() {
+  if (animating) {
+    skipRequestedStep = true;
+    return;
+  }
+  animating = true;
+  refreshControls();
+  if (currentStep >= STEPS.length) {
+    currentStep = 0;
+    resetMemoryState();
+  }
+  while (currentStep < STEPS.length) {
+    await executeStep(currentStep);
+    currentStep += 1;
+    if (currentStep < STEPS.length) await sleep(DUR.medium);
+  }
+  statusEl.textContent = "Done ✓";
+  detailEl.textContent = "";
+  animating = false;
+  refreshControls();
+}
+
+async function stepOnce() {
+  if (animating) {
+    skipRequestedStep = true;
+    return;
+  }
+  if (currentStep >= STEPS.length) {
+    reset();
+    return;
+  }
+  animating = true;
+  refreshControls();
+  await executeStep(currentStep);
+  currentStep += 1;
+  animating = false;
+  refreshControls();
+}
+
+async function stepPrev() {
+  if (animating) return;
+  if (currentStep <= 0) {
+    reset();
+    return;
+  }
+  animating = true;
+  refreshControls();
+  const targetStep = currentStep - 2;
+  const previousRenderMode = renderMode;
+  renderMode = "instant";
+  resetMemoryState();
+  currentStep = 0;
+  for (let i = 0; i <= targetStep; i++) {
+    await executeStep(i);
+    currentStep = i + 1;
+  }
+  if (targetStep < 0) {
+    statusEl.textContent = "Ready";
+    detailEl.textContent = "";
+  }
+  renderMode = previousRenderMode;
+  animating = false;
+  refreshControls();
+}
+
+function refreshControls() {
+  document.getElementById("btn-play").disabled = false;
+  document.getElementById("btn-step").disabled = false;
+  document.getElementById("btn-prev").disabled = animating || currentStep === 0;
+}
+
+function reset() {
+  if (animating) return;
+  currentStep = 0;
+  resetMemoryState();
+  statusEl.textContent = "Ready";
+  detailEl.textContent = "";
+  refreshControls();
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-prev").addEventListener("click", stepPrev);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-reset").addEventListener("click", reset);
+document.getElementById("btn-mode").addEventListener("click", () => {
+  if (animating) return;
+  mode = mode === "sequential" ? "parallel" : "sequential";
+  document.getElementById("btn-mode").textContent = `Mode: ${mode}`;
+});
+
+buildDOM();
+reset();
+</script>
+</body>
+</html>

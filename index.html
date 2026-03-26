@@ -96,8 +96,8 @@
 <body>
 <div class="wrap">
   <h1>FSDP visualizations</h1>
-  <p class="meta">Research on PyTorch Fully Sharded Data Parallel (VLDB 2023). <a href="https://doi.org/10.14778/3611540.3611569">DOI: 10.14778/3611540.3611569</a></p>
-  <p class="intro">Self-contained pages: open any link below in a browser; no build step.</p>
+  <!-- <p class="meta">Research on PyTorch Fully Sharded Data Parallel (VLDB 2023). <a href="https://doi.org/10.14778/3611540.3611569">DOI: 10.14778/3611540.3611569</a></p>
+  <p class="intro">Self-contained pages: open any link below in a browser; no build step.</p> -->
 
   <h2>Demos</h2>
   <ul>
@@ -115,6 +115,24 @@
     </li>
     <li>
       <a href="ddp_e2e_hbm.html">DDP end-to-end (HBM)<span>Same pipeline view for standard data parallel.</span></a>
+    </li>
+    <li>
+      <a href="fsdp_e2e_hbm_half.html">FSDP end-to-end (mixed precision)<span>Same HBM timeline as the FP32 demo; half-sized transient slots for gathered params and full ∇ (paper native mixed precision).</span></a>
+    </li>
+    <li>
+      <a href="moe_expert_parallel.html">MoE: Expert Parallelism + FSDP<span>2 ranks, 2 experts. FSDP AllGather for attention, All-to-All token dispatch for experts. Based on torchtitan dp2ep, not the FSDP paper.</span></a>
+    </li>
+    <li>
+      <a href="fsdp_prefetch.html">Backward prefetching<span>Gantt-chart timeline comparing no-prefetch vs prefetch. Shows how reordering AllGather before ReduceScatter eliminates idle gaps. Paper § 3.3.2.</span></a>
+    </li>
+    <li>
+      <a href="fsdp_raf.html">Reshard after forward (RAF vs NRAF)<span>Side-by-side HBM view: RAF frees params after forward (less memory, more comm), NRAF keeps them (less comm, more memory). Paper § 3.1, § 5.2.</span></a>
+    </li>
+    <li>
+      <a href="fsdp_grad_accum.html">Gradient accumulation<span>With vs without per-micro-batch communication. Shows the memory/comm tradeoff of keeping full unsharded gradients vs reducing each micro-batch. Paper § 3.3.4.</span></a>
+    </li>
+    <li>
+      <a href="fsdp_rate_limiter.html">Rate limiter<span>CPU/GPU Gantt chart showing how capping inflight AllGathers prevents memory spikes and cudaMalloc retries. Paper § 3.4.</span></a>
     </li>
   </ul>
 </div>

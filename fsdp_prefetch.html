@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP Backward Prefetching</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #161821;
+    --panel-2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e7e8ec;
+    --muted: #8a8f9f;
+    --muted-2: #616777;
+    --ag: #e0626e;
+    --rs: #a87bd4;
+    --bwd: #6bc48d;
+    --idle-bg: rgba(120,120,140,0.15);
+    --idle-border: rgba(150,150,170,0.25);
+  }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(105,145,231,0.08), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(212,120,92,0.08), transparent 28%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 18px 48px;
+  }
+
+  h1 { font-size: 3rem; font-weight: 700; letter-spacing: 0.03em; margin-bottom: 6px; }
+
+  .subtitle {
+    font-size: 1.15rem;
+    color: var(--muted);
+    max-width: 860px;
+    text-align: center;
+    margin-bottom: 24px;
+    line-height: 1.55;
+  }
+
+  .legend {
+    display: flex; gap: 22px; flex-wrap: wrap; justify-content: center;
+    margin-bottom: 24px; font-size: 1.05rem; color: var(--muted);
+  }
+  .legend-item { display: flex; align-items: center; gap: 7px; }
+  .legend-swatch { width: 20px; height: 16px; border-radius: 4px; }
+  .legend-swatch.idle { border: 1.5px dashed var(--idle-border); background: var(--idle-bg); }
+
+  .gantt-pair {
+    width: min(980px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    margin-bottom: 22px;
+  }
+
+  .gantt-panel {
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 20px 24px 18px;
+    background: rgba(18, 20, 28, 0.92);
+    box-shadow: 0 18px 40px rgba(0,0,0,0.24);
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .panel-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .tag {
+    font-size: 0.85rem;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-weight: 600;
+  }
+  .tag.slower { background: rgba(224,98,110,0.18); color: #e88; }
+  .tag.faster { background: rgba(107,196,141,0.18); color: #8d8; }
+
+  .timeline { display: flex; flex-direction: column; gap: 6px; }
+
+  .lane {
+    display: flex;
+    align-items: center;
+    min-height: 50px;
+  }
+
+  .lane-label {
+    width: 90px;
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--muted-2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    text-align: right;
+    padding-right: 14px;
+  }
+
+  .lane-track {
+    flex: 1;
+    position: relative;
+    min-height: 44px;
+  }
+
+  .gblock {
+    height: 42px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.12);
+    position: absolute;
+    top: 1px;
+    opacity: 0;
+    transform: scaleX(0.7);
+    transition: opacity 0.4s, transform 0.4s;
+  }
+
+  .gblock.visible {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  .gblock.ag { background: var(--ag); }
+  .gblock.rs { background: var(--rs); }
+  .gblock.bwd { background: var(--bwd); }
+  .gblock.idle {
+    background: var(--idle-bg);
+    border-style: dashed;
+    border-color: var(--idle-border);
+    color: rgba(200,200,220,0.45);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .gblock.highlight {
+    box-shadow: 0 0 0 3px rgba(255,255,255,0.45), 0 0 16px rgba(137,167,255,0.3);
+    z-index: 5;
+  }
+
+  .panel-footer {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.95rem;
+    color: var(--muted);
+  }
+
+  .time-bar {
+    height: 5px;
+    border-radius: 3px;
+    opacity: 0.5;
+    transition: width 0.5s;
+  }
+
+  .controls {
+    display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-bottom: 14px;
+  }
+
+  button {
+    font-family: inherit; font-size: 1.5rem; font-weight: 600;
+    padding: 10px 22px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button:hover { background: #23273a; border-color: #3b3f52; }
+  button:disabled { opacity: 0.4; cursor: consumer; }
+
+  .status-wrap {
+    width: min(980px, 100%);
+    background: rgba(22,24,33,0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+
+  #status { font-size: 1.7rem; font-weight: 700; margin-bottom: 4px; }
+  #detail { font-size: 1.2rem; color: var(--muted); line-height: 1.5; }
+  #detail:empty { display: none; }
+</style>
+</head>
+<body>
+
+<h1>Backward Prefetching</h1>
+<p class="subtitle">
+  <!-- FSDP's collectives run sequentially in a single producer stream.
+  Without prefetch, the producer stream serializes ReduceScatter → AllGather, forcing the consumer stream to wait.
+  With prefetch, AllGather is issued <em>before</em> ReduceScatter, so the next unit's params are ready sooner. &nbsp;Paper § 3.3.2. -->
+</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--ag)"></div> AllGather (producer)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--rs)"></div> ReduceScatter (producer)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--bwd)"></div> Backward (consumer)</div>
+  <div class="legend-item"><div class="legend-swatch idle"></div> Idle</div>
+</div>
+
+<div class="gantt-pair">
+  <!-- No Prefetch -->
+  <div class="gantt-panel">
+    <div class="panel-header">
+      <div class="panel-title">No Prefetch</div>
+      <div class="tag slower">slower</div>
+    </div>
+    <div class="timeline">
+      <div class="lane">
+        <div class="lane-label">consumer</div>
+        <div class="lane-track" id="np-compute"></div>
+      </div>
+      <div class="lane">
+        <div class="lane-label">producer</div>
+        <div class="lane-track" id="np-comm"></div>
+      </div>
+    </div>
+    <div class="panel-footer">
+      <span>Total: <strong>21</strong> time units</span>
+      <div class="time-bar" id="np-bar" style="width:0;background:var(--ag)"></div>
+    </div>
+  </div>
+
+  <!-- With Prefetch -->
+  <div class="gantt-panel">
+    <div class="panel-header">
+      <div class="panel-title">With Prefetch</div>
+      <div class="tag faster">faster</div>
+    </div>
+    <div class="timeline">
+      <div class="lane">
+        <div class="lane-label">consumer</div>
+        <div class="lane-track" id="pf-compute"></div>
+      </div>
+      <div class="lane">
+        <div class="lane-label">producer</div>
+        <div class="lane-track" id="pf-comm"></div>
+      </div>
+    </div>
+    <div class="panel-footer">
+      <span>Total: <strong>17</strong> time units</span>
+      <div class="time-bar" id="pf-bar" style="width:0;background:var(--bwd)"></div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+</div>
+
+<div class="status-wrap">
+  <div id="status">Ready</div>
+  <div id="detail">Step through to compare backward passes with and without prefetching. Idle gaps show where compute waits for comm.</div>
+</div>
+
+<script>
+const U = 38;
+
+/*
+ * No Prefetch timeline (total 21 time units):
+ *   AG2[0-2] → BWD2[2-5] → RS2[5-7] → AG1[7-9] → BWD1[9-12] → RS1[12-14] → AG0[14-16] → BWD0[16-19] → RS0[19-21]
+ *
+ * With Prefetch timeline (total 17 time units):
+ *   AG2[0-2] → BWD2[2-5] → AG1[5-7],RS2[7-9] → BWD1[7-10] → AG0[10-12],RS1[12-14] → BWD0[12-15] → RS0[15-17]
+ */
+
+const NP = {
+  comm: [
+    { label: "AG₂", cls: "ag",   start: 0,  dur: 2, step: 0 },
+    { label: "RS₂", cls: "rs",   start: 5,  dur: 2, step: 2 },
+    { label: "AG₁", cls: "ag",   start: 7,  dur: 2, step: 2 },
+    { label: "RS₁", cls: "rs",   start: 12, dur: 2, step: 4 },
+    { label: "AG₀", cls: "ag",   start: 14, dur: 2, step: 4 },
+    { label: "RS₀", cls: "rs",   start: 19, dur: 2, step: 6 },
+  ],
+  compute: [
+    { label: "wait",   cls: "idle", start: 0,  dur: 2, step: 0 },
+    { label: "BWD₂",   cls: "bwd",  start: 2,  dur: 3, step: 1 },
+    { label: "idle",   cls: "idle", start: 5,  dur: 4, step: 2 },
+    { label: "BWD₁",   cls: "bwd",  start: 9,  dur: 3, step: 3 },
+    { label: "idle",   cls: "idle", start: 12, dur: 4, step: 4 },
+    { label: "BWD₀",   cls: "bwd",  start: 16, dur: 3, step: 5 },
+  ],
+};
+
+const PF = {
+  comm: [
+    { label: "AG₂", cls: "ag",   start: 0,  dur: 2, step: 0 },
+    { label: "AG₁", cls: "ag",   start: 5,  dur: 2, step: 2 },
+    { label: "RS₂", cls: "rs",   start: 7,  dur: 2, step: 2 },
+    { label: "AG₀", cls: "ag",   start: 10, dur: 2, step: 4 },
+    { label: "RS₁", cls: "rs",   start: 12, dur: 2, step: 4 },
+    { label: "RS₀", cls: "rs",   start: 15, dur: 2, step: 6 },
+  ],
+  compute: [
+    { label: "wait",   cls: "idle", start: 0,  dur: 2, step: 0 },
+    { label: "BWD₂",   cls: "bwd",  start: 2,  dur: 3, step: 1 },
+    { label: "wait",   cls: "idle", start: 5,  dur: 2, step: 2 },
+    { label: "BWD₁",   cls: "bwd",  start: 7,  dur: 3, step: 3 },
+    { label: "wait",   cls: "idle", start: 10, dur: 2, step: 4 },
+    { label: "BWD₀",   cls: "bwd",  start: 12, dur: 3, step: 5 },
+  ],
+};
+
+function placeBlocks(trackId, blocks) {
+  const track = document.getElementById(trackId);
+  track.innerHTML = "";
+  blocks.forEach(b => {
+    const el = document.createElement("div");
+    el.className = `gblock ${b.cls}`;
+    el.textContent = b.label;
+    el.style.left = `${b.start * U}px`;
+    el.style.width = `${b.dur * U}px`;
+    track.appendChild(el);
+    b.el = el;
+  });
+}
+
+const allBlocks = [];
+function buildAll() {
+  allBlocks.length = 0;
+  placeBlocks("np-comm", NP.comm);
+  placeBlocks("np-compute", NP.compute);
+  placeBlocks("pf-comm", PF.comm);
+  placeBlocks("pf-compute", PF.compute);
+  [NP.comm, NP.compute, PF.comm, PF.compute].forEach(arr => arr.forEach(b => allBlocks.push(b)));
+}
+
+const STEPS = [
+  {
+    title: "AllGather U2",
+    detail: "Both modes start identically: AllGather unit 2's parameters on the producer stream. consumer stream is idle, waiting.",
+  },
+  {
+    title: "Backward compute U2",
+    detail: "BWD₂ runs on the consumer stream while the producer stream is idle. Identical in both modes.",
+  },
+  {
+    title: "Post-BWD₂: comm order differs",
+    detail: "No-prefetch issues RS₂ then AG₁ on the single producer stream — consumer stream idles for 4 units (RS+AG). Prefetch issues AG₁ before RS₂ — consumer stream only idles for 2 units (AG only). This is the key reordering.",
+  },
+  {
+    title: "Backward compute U1",
+    detail: "BWD₁ starts at t=9 without prefetch but at t=7 with prefetch — the 2-unit head start from reordering AG₁ before RS₂ in the producer stream. Note RS₂ overlaps with BWD₁ across the two streams.",
+  },
+  {
+    title: "Post-BWD₁: same pattern repeats",
+    detail: "Without prefetch: RS₁ then AG₀ (4 units idle). With prefetch: AG₀ then RS₁ (2 units idle). The savings compound.",
+  },
+  {
+    title: "Backward compute U0",
+    detail: "BWD₀ starts at t=16 vs t=12. The gap between the two modes widens with each unit.",
+  },
+  {
+    title: "Final ReduceScatter",
+    detail: "RS₀ completes the backward pass. No-prefetch finishes at t=21, prefetch at t=17 — a 19% improvement from simply reordering comm operations.",
+  },
+];
+
+const statusEl = document.getElementById("status");
+const detailEl = document.getElementById("detail");
+let currentStep = -1;
+let animating = false;
+let skipRequested = false;
+let renderMode = "animate";
+
+function showStep(idx) {
+  allBlocks.forEach(b => {
+    b.el.classList.toggle("visible", b.step <= idx);
+    b.el.classList.remove("highlight");
+  });
+  allBlocks.filter(b => b.step === idx).forEach(b => b.el.classList.add("highlight"));
+
+  document.getElementById("np-bar").style.width = `${Math.min(21, (idx + 1) * 3.5) * U}px`;
+  document.getElementById("pf-bar").style.width = `${Math.min(17, (idx + 1) * 3) * U}px`;
+
+  if (idx >= 0 && idx < STEPS.length) {
+    statusEl.textContent = `${idx + 1}/${STEPS.length}  ${STEPS[idx].title}`;
+    detailEl.textContent = STEPS[idx].detail;
+  }
+}
+
+function resetViz() {
+  currentStep = -1;
+  allBlocks.forEach(b => b.el.classList.remove("visible", "highlight"));
+  document.getElementById("np-bar").style.width = "0";
+  document.getElementById("pf-bar").style.width = "0";
+  statusEl.textContent = "Ready";
+  detailEl.textContent = "Step through to compare backward passes with and without prefetching. Idle gaps show where compute waits for comm.";
+}
+
+function sleep(ms) {
+  if (renderMode === "instant" || skipRequested) return Promise.resolve();
+  return new Promise(resolve => {
+    const tid = setTimeout(resolve, ms);
+    const check = () => {
+      if (skipRequested || renderMode === "instant") { clearTimeout(tid); resolve(); return; }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+}
+
+function refreshControls() {
+  document.getElementById("btn-prev").disabled = animating || currentStep <= 0;
+}
+
+async function playAll() {
+  if (animating) { skipRequested = true; return; }
+  animating = true;
+  refreshControls();
+  if (currentStep >= STEPS.length - 1) { resetViz(); await sleep(300); }
+  while (currentStep < STEPS.length - 1) {
+    currentStep++;
+    showStep(currentStep);
+    await sleep(1400);
+  }
+  animating = false;
+  refreshControls();
+}
+
+async function stepOnce() {
+  if (animating) { skipRequested = true; return; }
+  currentStep++;
+  if (currentStep >= STEPS.length) { resetViz(); refreshControls(); return; }
+  showStep(currentStep);
+  refreshControls();
+}
+
+async function stepPrev() {
+  if (animating || currentStep <= 0) return;
+  currentStep--;
+  if (currentStep < 0) { resetViz(); refreshControls(); return; }
+  showStep(currentStep);
+  refreshControls();
+}
+
+function reset() {
+  if (animating) return;
+  resetViz();
+  refreshControls();
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-prev").addEventListener("click", stepPrev);
+document.getElementById("btn-reset").addEventListener("click", reset);
+
+buildAll();
+resetViz();
+refreshControls();
+</script>
+</body>
+</html>

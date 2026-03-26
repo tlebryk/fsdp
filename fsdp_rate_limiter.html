@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP Rate Limiter</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel-2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e7e8ec;
+    --muted: #8a8f9f;
+    --muted-2: #616777;
+    --idle-bg: rgba(120,120,140,0.15);
+    --idle-border: rgba(150,150,170,0.25);
+    --u0: #e0626e;
+    --u1: #d4855c;
+    --u2: #a87bd4;
+    --u3: #5d82db;
+    --consumer: #6bc48d;
+    --cpu: #89a7ff;
+  }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(105,145,231,0.08), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(212,120,92,0.08), transparent 28%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 18px 48px;
+  }
+
+  h1 { font-size: 3rem; font-weight: 700; letter-spacing: 0.03em; margin-bottom: 6px; }
+
+  .subtitle {
+    font-size: 1.15rem;
+    color: var(--muted);
+    max-width: 920px;
+    text-align: center;
+    margin-bottom: 24px;
+    line-height: 1.55;
+  }
+
+  .legend {
+    display: flex; gap: 18px; flex-wrap: wrap; justify-content: center;
+    margin-bottom: 24px; font-size: 1rem; color: var(--muted);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 18px; height: 14px; border-radius: 4px; }
+  .legend-swatch.idle { border: 1.5px dashed var(--idle-border); background: var(--idle-bg); }
+
+  .gantt-pair {
+    width: min(980px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    margin-bottom: 22px;
+  }
+
+  .gantt-panel {
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 20px 24px 16px;
+    background: rgba(18,20,28,0.92);
+    box-shadow: 0 18px 40px rgba(0,0,0,0.24);
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .panel-title { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.04em; }
+  .tag { font-size: 0.85rem; padding: 3px 10px; border-radius: 6px; font-weight: 600; }
+  .tag.bad { background: rgba(224,98,110,0.18); color: #e88; }
+  .tag.good { background: rgba(107,196,141,0.18); color: #8d8; }
+
+  .timeline { display: flex; flex-direction: column; gap: 4px; }
+
+  .lane { display: flex; align-items: center; min-height: 42px; }
+
+  .lane-label-wrap {
+    width: 140px; flex-shrink: 0;
+    text-align: right; padding-right: 14px;
+  }
+  .lane-name {
+    font-size: 0.85rem; font-weight: 700;
+    color: var(--muted-2); text-transform: uppercase; letter-spacing: 0.07em;
+  }
+  .lane-role {
+    font-size: 0.72rem; font-weight: 600;
+    color: var(--muted-2); opacity: 0.7; letter-spacing: 0.04em;
+  }
+
+  .lane-track { flex: 1; position: relative; min-height: 38px; }
+
+  .gblock {
+    height: 36px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.88rem; font-weight: 700; color: #fff;
+    border: 1px solid rgba(255,255,255,0.14);
+    position: absolute; top: 1px;
+    opacity: 0; transform: scaleX(0.7);
+    transition: opacity 0.4s, transform 0.4s;
+  }
+  .gblock.visible { opacity: 1; transform: scaleX(1); }
+  .gblock.idle {
+    background: var(--idle-bg); border-style: dashed;
+    border-color: var(--idle-border);
+    color: rgba(200,200,220,0.4); font-size: 0.75rem;
+  }
+  .gblock.highlight {
+    box-shadow: 0 0 0 3px rgba(255,255,255,0.45), 0 0 16px rgba(137,167,255,0.3);
+    z-index: 5;
+  }
+  .gblock.cpu-thin { height: 26px; top: 7px; font-size: 0.78rem; }
+
+  .stream-sep {
+    margin: 4px 0 4px 140px;
+    border-top: 1px dashed rgba(137,167,255,0.18);
+  }
+
+  /* GPU Memory — caching allocator view */
+  .gpu-mem-section {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .gpu-mem-title {
+    font-size: 0.85rem; font-weight: 700;
+    color: var(--muted-2); text-transform: uppercase;
+    letter-spacing: 0.07em; margin-bottom: 8px;
+  }
+  .gpu-mem-bar {
+    display: flex;
+    height: 32px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: rgba(20,22,32,0.9);
+  }
+  .gpu-mem-seg {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.72rem; font-weight: 700; color: #fff;
+    transition: flex-basis 0.5s, opacity 0.4s;
+    overflow: hidden;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .gpu-mem-seg.producer { border-right: 1px solid rgba(0,0,0,0.3); }
+  .gpu-mem-seg.stream-wall {
+    flex-basis: 4px !important; min-width: 4px; max-width: 4px;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,0.5), rgba(255,255,255,0.5) 3px, transparent 3px, transparent 6px);
+  }
+  .gpu-mem-seg.consumer { background: var(--consumer); }
+  .gpu-mem-seg.free { background: rgba(40,42,55,0.7); color: rgba(255,255,255,0.3); }
+  .gpu-mem-seg.retry {
+    background: repeating-linear-gradient(
+      45deg, #c04040, #c04040 6px, #a03030 6px, #a03030 12px
+    );
+    animation: retryPulse 1s ease-in-out infinite;
+  }
+  @keyframes retryPulse {
+    0%, 100% { opacity: 0.85; }
+    50% { opacity: 1; }
+  }
+
+  .gpu-mem-labels {
+    margin-top: 4px;
+    display: flex;
+    font-size: 0.75rem;
+    color: var(--muted-2);
+  }
+  .gpu-mem-labels span {
+    transition: flex-basis 0.5s;
+    text-align: center;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .inflight-row {
+    margin-top: 6px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 0.9rem;
+  }
+  .inflight-label {
+    font-size: 0.82rem; font-weight: 700;
+    color: var(--muted-2); text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
+  .inflight-val { font-weight: 700; transition: color 0.3s; }
+  .inflight-val.high { color: #e88; }
+  .inflight-val.ok { color: #8d8; }
+
+  .controls {
+    display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-bottom: 14px;
+  }
+
+  button {
+    font-family: inherit; font-size: 1.5rem; font-weight: 600;
+    padding: 10px 22px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer;
+    transition: background 0.15s;
+  }
+  button:hover { background: #23273a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+
+  .status-wrap {
+    width: min(980px, 100%);
+    background: rgba(22,24,33,0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+
+  #status { font-size: 1.7rem; font-weight: 700; margin-bottom: 4px; }
+  #detail { font-size: 1.2rem; color: var(--muted); line-height: 1.5; }
+  #detail:empty { display: none; }
+</style>
+</head>
+<body>
+
+<h1>Rate Limiter</h1>
+<p class="subtitle">
+  FSDP allocates AllGather buffers in a <em>producer stream</em> (NCCL); forward/backward computation runs in a
+  <em>consumer stream</em> (default). The caching allocator assigns blocks <em>per-stream</em> — a block allocated for
+  the producer stream <strong>cannot be reused</strong> by the consumer stream, even after the AllGather finishes.
+  If the CPU runs ahead and issues too many AllGathers, the producer stream claims too much of the total GPU memory,
+  leaving insufficient room for the consumer to allocate activations — forcing a costly <code>cudaMalloc</code> retry
+  (blocking <code>cudaFree</code>s to reset allocator state).
+  The rate limiter caps in-flight AllGathers to 2, preventing over-allocation. &nbsp;Paper § 3.4.
+</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--u0)"></div> Unit 0</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--u1)"></div> Unit 1</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--u2)"></div> Unit 2</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--u3)"></div> Unit 3</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--consumer)"></div> Consumer workspace</div>
+  <div class="legend-item"><div class="legend-swatch idle"></div> CPU blocked</div>
+</div>
+
+<div class="gantt-pair">
+  <!-- No Rate Limiter -->
+  <div class="gantt-panel" id="panel-nl">
+    <div class="panel-header">
+      <div class="panel-title">No Rate Limiter</div>
+      <div class="tag bad">unbounded in-flight</div>
+    </div>
+    <div class="timeline">
+      <div class="lane">
+        <div class="lane-label-wrap">
+          <div class="lane-name">CPU Thread</div>
+          <div class="lane-role">issues ops</div>
+        </div>
+        <div class="lane-track" id="nl-cpu"></div>
+      </div>
+      <div class="stream-sep"></div>
+      <div class="lane">
+        <div class="lane-label-wrap">
+          <div class="lane-name">Producer</div>
+          <div class="lane-role">NCCL stream — alloc</div>
+        </div>
+        <div class="lane-track" id="nl-comm"></div>
+      </div>
+      <div class="lane">
+        <div class="lane-label-wrap">
+          <div class="lane-name">Consumer</div>
+          <div class="lane-role">default stream — free</div>
+        </div>
+        <div class="lane-track" id="nl-compute"></div>
+      </div>
+    </div>
+    <div class="gpu-mem-section">
+      <div class="gpu-mem-title">GPU Memory — Caching Allocator</div>
+      <div class="gpu-mem-bar" id="nl-membar"></div>
+      <div class="gpu-mem-labels" id="nl-memlabels"></div>
+    </div>
+    <div class="inflight-row">
+      <span class="inflight-label">In-flight:</span>
+      <span class="inflight-val" id="nl-inflight">0</span>
+    </div>
+  </div>
+
+  <!-- Rate Limiter -->
+  <div class="gantt-panel" id="panel-rl">
+    <div class="panel-header">
+      <div class="panel-title">Rate Limiter (limit = 2)</div>
+      <div class="tag good">bounded in-flight</div>
+    </div>
+    <div class="timeline">
+      <div class="lane">
+        <div class="lane-label-wrap">
+          <div class="lane-name">CPU Thread</div>
+          <div class="lane-role">issues ops</div>
+        </div>
+        <div class="lane-track" id="rl-cpu"></div>
+      </div>
+      <div class="stream-sep"></div>
+      <div class="lane">
+        <div class="lane-label-wrap">
+          <div class="lane-name">Producer</div>
+          <div class="lane-role">NCCL stream — alloc</div>
+        </div>
+        <div class="lane-track" id="rl-comm"></div>
+      </div>
+      <div class="lane">
+        <div class="lane-label-wrap">
+          <div class="lane-name">Consumer</div>
+          <div class="lane-role">default stream — free</div>
+        </div>
+        <div class="lane-track" id="rl-compute"></div>
+      </div>
+    </div>
+    <div class="gpu-mem-section">
+      <div class="gpu-mem-title">GPU Memory — Caching Allocator</div>
+      <div class="gpu-mem-bar" id="rl-membar"></div>
+      <div class="gpu-mem-labels" id="rl-memlabels"></div>
+    </div>
+    <div class="inflight-row">
+      <span class="inflight-label">In-flight:</span>
+      <span class="inflight-val" id="rl-inflight">0</span>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+</div>
+
+<div class="status-wrap">
+  <div id="status">Ready</div>
+  <div id="detail">The caching allocator assigns blocks per-stream: NCCL-stream blocks can't be used by the default stream. Step through to see how over-allocating the NCCL stream starves the default stream.</div>
+</div>
+
+<script>
+const U = 36;
+const UNIT_RAW = ["#e0626e", "#d4855c", "#a87bd4", "#5d82db"];
+const CONSUMER_COLOR = "#6bc48d";
+const TOTAL_MEM = 10;
+
+const DATA = {
+  nl: {
+    cpu: [
+      { label: "AG₀", color: 0, cls: "cpu-thin", start: 0,  dur: 1, step: 0 },
+      { label: "AG₁", color: 1, cls: "cpu-thin", start: 1,  dur: 1, step: 0 },
+      { label: "AG₂", color: 2, cls: "cpu-thin", start: 2,  dur: 1, step: 0 },
+      { label: "AG₃", color: 3, cls: "cpu-thin", start: 3,  dur: 1, step: 0 },
+    ],
+    comm: [
+      { label: "AG₀", color: 0, cls: "", start: 0,  dur: 3, step: 1 },
+      { label: "AG₁", color: 1, cls: "", start: 3,  dur: 3, step: 2 },
+      { label: "AG₂", color: 2, cls: "", start: 6,  dur: 3, step: 3 },
+      { label: "AG₃", color: 3, cls: "", start: 9,  dur: 3, step: 4 },
+    ],
+    compute: [
+      { label: "C₀", color: 0, cls: "", start: 3,  dur: 2, step: 1 },
+      { label: "C₁", color: 1, cls: "", start: 6,  dur: 2, step: 2 },
+      { label: "C₂", color: 2, cls: "", start: 9,  dur: 2, step: 3 },
+      { label: "C₃", color: 3, cls: "", start: 12, dur: 2, step: 4 },
+    ],
+  },
+  rl: {
+    cpu: [
+      { label: "AG₀",    color: 0, cls: "cpu-thin", start: 0, dur: 1, step: 0 },
+      { label: "AG₁",    color: 1, cls: "cpu-thin", start: 1, dur: 1, step: 0 },
+      { label: "",        color:-1, cls: "idle cpu-thin", start: 2, dur: 3, step: 0 },
+      { label: "AG₂",    color: 2, cls: "cpu-thin", start: 5, dur: 1, step: 2 },
+      { label: "",        color:-1, cls: "idle cpu-thin", start: 6, dur: 2, step: 2 },
+      { label: "AG₃",    color: 3, cls: "cpu-thin", start: 8, dur: 1, step: 3 },
+    ],
+    comm: [
+      { label: "AG₀", color: 0, cls: "", start: 0, dur: 3, step: 1 },
+      { label: "AG₁", color: 1, cls: "", start: 3, dur: 3, step: 2 },
+      { label: "AG₂", color: 2, cls: "", start: 6, dur: 3, step: 3 },
+      { label: "AG₃", color: 3, cls: "", start: 9, dur: 3, step: 4 },
+    ],
+    compute: [
+      { label: "C₀", color: 0, cls: "", start: 3,  dur: 2, step: 1 },
+      { label: "C₁", color: 1, cls: "", start: 6,  dur: 2, step: 2 },
+      { label: "C₂", color: 2, cls: "", start: 9,  dur: 2, step: 3 },
+      { label: "C₃", color: 3, cls: "", start: 12, dur: 2, step: 4 },
+    ],
+  },
+};
+
+function placeBlocks(trackId, blocks) {
+  const track = document.getElementById(trackId);
+  track.innerHTML = "";
+  blocks.forEach(b => {
+    const el = document.createElement("div");
+    el.className = `gblock ${b.cls}`;
+    el.textContent = b.label;
+    el.style.left = `${b.start * U}px`;
+    el.style.width = `${b.dur * U}px`;
+    if (b.color >= 0) el.style.background = UNIT_RAW[b.color];
+    track.appendChild(el);
+    b.el = el;
+  });
+}
+
+const allBlocks = [];
+
+function buildAll() {
+  allBlocks.length = 0;
+  placeBlocks("nl-cpu", DATA.nl.cpu);
+  placeBlocks("nl-comm", DATA.nl.comm);
+  placeBlocks("nl-compute", DATA.nl.compute);
+  placeBlocks("rl-cpu", DATA.rl.cpu);
+  placeBlocks("rl-comm", DATA.rl.comm);
+  placeBlocks("rl-compute", DATA.rl.compute);
+  [DATA.nl.cpu, DATA.nl.comm, DATA.nl.compute,
+   DATA.rl.cpu, DATA.rl.comm, DATA.rl.compute]
+    .forEach(arr => arr.forEach(b => allBlocks.push(b)));
+}
+
+/*
+ * GPU Memory visualization.
+ * Shows per-stream block allocation: producer blocks (colored per-unit),
+ * consumer workspace (green), free space (dark), or retry (red stripes).
+ *
+ * mem state: { producer: [unit indices], consumer: units, retry: bool }
+ */
+function renderMemBar(barId, labelId, state) {
+  const bar = document.getElementById(barId);
+  const labels = document.getElementById(labelId);
+  bar.innerHTML = "";
+  labels.innerHTML = "";
+
+  const prodUnits = state.producer.length;
+  const consUnits = state.consumer;
+  const retrying = state.retry;
+  const freeUnits = TOTAL_MEM - prodUnits * 2 - consUnits;
+
+  state.producer.forEach(unitIdx => {
+    const seg = document.createElement("div");
+    seg.className = "gpu-mem-seg producer";
+    seg.style.flexBasis = `${(2 / TOTAL_MEM) * 100}%`;
+    seg.style.background = UNIT_RAW[unitIdx];
+    seg.textContent = `buf${unitIdx}`;
+    bar.appendChild(seg);
+  });
+
+  if (prodUnits > 0 && (consUnits > 0 || retrying || freeUnits > 0)) {
+    const wall = document.createElement("div");
+    wall.className = "gpu-mem-seg stream-wall";
+    wall.title = "stream boundary — blocks can't cross";
+    bar.appendChild(wall);
+  }
+
+  if (retrying) {
+    const seg = document.createElement("div");
+    seg.className = "gpu-mem-seg retry";
+    seg.style.flexBasis = `${((consUnits + Math.max(0, freeUnits)) / TOTAL_MEM) * 100}%`;
+    seg.textContent = "⚡ cudaMalloc retry";
+    bar.appendChild(seg);
+  } else {
+    if (consUnits > 0) {
+      const seg = document.createElement("div");
+      seg.className = "gpu-mem-seg consumer";
+      seg.style.flexBasis = `${(consUnits / TOTAL_MEM) * 100}%`;
+      seg.textContent = "activations";
+      bar.appendChild(seg);
+    }
+    if (freeUnits > 0) {
+      const seg = document.createElement("div");
+      seg.className = "gpu-mem-seg free";
+      seg.style.flexBasis = `${(freeUnits / TOTAL_MEM) * 100}%`;
+      seg.textContent = "free";
+      bar.appendChild(seg);
+    }
+  }
+
+  // Labels
+  if (prodUnits > 0) {
+    const l = document.createElement("span");
+    l.style.flexBasis = `${(prodUnits * 2 / TOTAL_MEM) * 100}%`;
+    l.textContent = `← owned by NCCL stream (${prodUnits * 2}/${TOTAL_MEM})`;
+    labels.appendChild(l);
+  }
+  const rest = document.createElement("span");
+  rest.style.flexBasis = `${((TOTAL_MEM - prodUnits * 2) / TOTAL_MEM) * 100}%`;
+  rest.textContent = retrying ? "← default stream can't allocate!" : (consUnits > 0 ? `← available to default stream (${consUnits}/${TOTAL_MEM})` : "");
+  labels.appendChild(rest);
+}
+
+function setInflight(elId, count, isHigh) {
+  const el = document.getElementById(elId);
+  el.textContent = count;
+  el.className = "inflight-val " + (isHigh ? "high" : "ok");
+}
+
+const STEPS = [
+  {
+    title: "CPU issues AllGathers",
+    detail: "No limiter: CPU fires AG₀–AG₃ instantly — the caching allocator assigns 4 buffers to the NCCL stream pool before the GPU executes any. These blocks are owned by the NCCL stream and cannot be used by the default stream, even once the AllGather finishes. Rate limiter: CPU issues AG₀, AG₁ (in-flight = 2 = limit), then blocks.",
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", { producer: [0,1,2,3], consumer: 0, retry: true });
+      setInflight("nl-inflight", 4, true);
+      renderMemBar("rl-membar", "rl-memlabels", { producer: [0,1], consumer: 3, retry: false });
+      setInflight("rl-inflight", 2, false);
+    },
+  },
+  {
+    title: "Producer: AG₀ executes → Consumer: C₀ starts",
+    detail: "AG₀ runs on the NCCL stream. When it completes, C₀ starts on the default stream, using the AllGathered params. But the default stream also needs to allocate workspace (activations). Without rate limiting, 4 NCCL-stream blocks have claimed all available GPU memory — the default stream's allocation fails, triggering a cudaMalloc retry.",
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", { producer: [0,1,2,3], consumer: 0, retry: true });
+      setInflight("nl-inflight", 4, true);
+      renderMemBar("rl-membar", "rl-memlabels", { producer: [0,1], consumer: 3, retry: false });
+      setInflight("rl-inflight", 2, false);
+    },
+  },
+  {
+    title: "Consumer: C₀ done → buf₀ freed",
+    detail: "C₀ finishes — buf₀ can be returned to the caching allocator. No limiter: 3 NCCL-stream blocks still remain, but memory pressure eases. Rate limiter: in-flight drops to 1, CPU unblocks and issues AG₂ — the allocator reuses the freed block for buf₂, keeping in-flight at 2. The NCCL stream never owns more than 2 blocks at once.",
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", { producer: [1,2,3], consumer: 2, retry: false });
+      setInflight("nl-inflight", 3, true);
+      renderMemBar("rl-membar", "rl-memlabels", { producer: [1,2], consumer: 3, retry: false });
+      setInflight("rl-inflight", 2, false);
+    },
+  },
+  {
+    title: "Consumer: C₁ done → buf₁ freed",
+    detail: "C₁ frees buf₁. No limiter: 2 NCCL-stream blocks remain. Rate limiter: in-flight drops to 1, CPU issues AG₃ → back to 2. The rate limiter ensures the NCCL stream never owns more than 2 blocks, leaving the rest of GPU memory available for the default stream.",
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", { producer: [2,3], consumer: 3, retry: false });
+      setInflight("nl-inflight", 2, false);
+      renderMemBar("rl-membar", "rl-memlabels", { producer: [2,3], consumer: 3, retry: false });
+      setInflight("rl-inflight", 2, false);
+    },
+  },
+  {
+    title: "All units complete",
+    detail: "AG₂→C₂, AG₃→C₃ finish. Both modes complete the same GPU work. The rate limiter doesn't slow GPU throughput — it only prevents the CPU from running too far ahead of GPU execution.",
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", { producer: [], consumer: 0, retry: false });
+      setInflight("nl-inflight", 0, false);
+      renderMemBar("rl-membar", "rl-memlabels", { producer: [], consumer: 0, retry: false });
+      setInflight("rl-inflight", 0, false);
+    },
+  },
+  {
+    title: "Summary: per-stream over-allocation",
+    detail: "Without rate limiting, the caching allocator assigns too many blocks to the NCCL stream pool. These blocks cannot be reused by the default stream — they belong to a different stream. At a global level, the default stream is starved of memory and its activation allocation fails, triggering a costly cudaMalloc retry (blocking cudaFrees to reset allocator state). The rate limiter keeps ≤ 2 in-flight AllGathers, so the NCCL stream never claims too much of the GPU's memory.",
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", { producer: [0,1,2,3], consumer: 0, retry: true });
+      setInflight("nl-inflight", 4, true);
+      renderMemBar("rl-membar", "rl-memlabels", { producer: [0,1], consumer: 3, retry: false });
+      setInflight("rl-inflight", 2, false);
+    },
+  },
+];
+
+const statusEl = document.getElementById("status");
+const detailEl = document.getElementById("detail");
+let currentStep = -1;
+let animating = false;
+let skipRequested = false;
+
+function showStep(idx) {
+  const s = STEPS[idx];
+  allBlocks.forEach(b => {
+    b.el.classList.toggle("visible", b.step <= idx);
+    b.el.classList.remove("highlight");
+  });
+  allBlocks.filter(b => b.step === idx).forEach(b => b.el.classList.add("highlight"));
+  s.run();
+  statusEl.textContent = `${idx + 1}/${STEPS.length}  ${s.title}`;
+  detailEl.textContent = s.detail;
+}
+
+function resetViz() {
+  currentStep = -1;
+  allBlocks.forEach(b => b.el.classList.remove("visible", "highlight"));
+  renderMemBar("nl-membar", "nl-memlabels", { producer: [], consumer: 0, retry: false });
+  renderMemBar("rl-membar", "rl-memlabels", { producer: [], consumer: 0, retry: false });
+  setInflight("nl-inflight", 0, false);
+  setInflight("rl-inflight", 0, false);
+  statusEl.textContent = "Ready";
+  detailEl.textContent = "The caching allocator assigns blocks per-stream: NCCL-stream blocks can't be used by the default stream. Step through to see how over-allocating the NCCL stream starves the default stream.";
+}
+
+function sleep(ms) {
+  if (skipRequested) return Promise.resolve();
+  return new Promise(r => {
+    const t = setTimeout(r, ms);
+    const c = () => { if (skipRequested) { clearTimeout(t); r(); return; } requestAnimationFrame(c); };
+    requestAnimationFrame(c);
+  });
+}
+
+function refreshControls() {
+  document.getElementById("btn-prev").disabled = animating || currentStep <= 0;
+}
+
+async function playAll() {
+  if (animating) { skipRequested = true; return; }
+  animating = true; refreshControls();
+  if (currentStep >= STEPS.length - 1) { resetViz(); await sleep(300); }
+  while (currentStep < STEPS.length - 1) {
+    currentStep++;
+    showStep(currentStep);
+    await sleep(1600);
+  }
+  animating = false; refreshControls();
+}
+
+function stepOnce() {
+  if (animating) { skipRequested = true; return; }
+  currentStep++;
+  if (currentStep >= STEPS.length) { resetViz(); refreshControls(); return; }
+  showStep(currentStep);
+  refreshControls();
+}
+
+function stepPrev() {
+  if (animating || currentStep <= 0) return;
+  currentStep--;
+  if (currentStep < 0) { resetViz(); refreshControls(); return; }
+  showStep(currentStep);
+  refreshControls();
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-prev").addEventListener("click", stepPrev);
+document.getElementById("btn-reset").addEventListener("click", () => { if (!animating) { resetViz(); refreshControls(); } });
+
+buildAll();
+resetViz();
+refreshControls();
+</script>
+</body>
+</html>

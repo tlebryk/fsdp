@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSDP Reshard After Forward</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #161821;
+    --panel-2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e7e8ec;
+    --muted: #8a8f9f;
+    --muted-2: #616777;
+    --accent: #89a7ff;
+    --persistent: rgba(63,141,110,0.12);
+    --transient: rgba(196,127,95,0.12);
+  }
+
+  body {
+    font-family: "Inter", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(105,145,231,0.08), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(212,120,92,0.08), transparent 28%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 18px 48px;
+  }
+
+  h1 { font-size: 3rem; font-weight: 700; letter-spacing: 0.03em; margin-bottom: 6px; }
+
+  .subtitle {
+    font-size: 1.15rem;
+    color: var(--muted);
+    max-width: 860px;
+    text-align: center;
+    margin-bottom: 24px;
+    line-height: 1.55;
+  }
+
+  #stage {
+    position: relative;
+    width: min(1080px, 100%);
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  .mode-card {
+    width: min(510px, 100%);
+    background: rgba(18,20,28,0.92);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px;
+    box-shadow: 0 18px 40px rgba(0,0,0,0.24);
+  }
+
+  .card-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+
+  .card-title { font-size: 1.6rem; font-weight: 700; letter-spacing: 0.04em; }
+  .card-sub { font-size: 0.95rem; color: var(--muted); margin-bottom: 14px; }
+
+  .tag {
+    font-size: 0.8rem; padding: 2px 8px; border-radius: 5px; font-weight: 600;
+  }
+  .tag.mem { background: rgba(107,196,141,0.15); color: #8d8; }
+  .tag.comm { background: rgba(168,123,212,0.15); color: #c8a8e8; }
+
+  .hbm-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .memory-group {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px;
+    background: rgba(26,29,39,0.75);
+  }
+  .memory-group.persistent { background: linear-gradient(180deg, var(--persistent), rgba(26,29,39,0.78)); }
+  .memory-group.transient { background: linear-gradient(180deg, var(--transient), rgba(26,29,39,0.78)); }
+
+  .group-title {
+    font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.12em;
+    font-weight: 700; margin-bottom: 8px; color: var(--muted);
+  }
+
+  .section { margin-bottom: 14px; }
+  .section:last-child { margin-bottom: 0; }
+
+  .section-label {
+    font-size: 1rem; color: var(--muted); margin-bottom: 6px;
+  }
+
+  .buffer {
+    min-height: 54px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(15,17,23,0.65);
+    padding: 8px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  }
+
+  .buffer.transient-buffer {
+    border-style: dashed;
+    background: rgba(15,17,23,0.55);
+  }
+
+  .buffer.highlight {
+    border-color: #b7c9ff;
+    border-width: 2px;
+    background: rgba(28,34,54,0.82);
+    box-shadow: 0 0 0 2px rgba(137,167,255,0.34), 0 0 34px rgba(137,167,255,0.28);
+  }
+
+  .slot {
+    width: 52px; height: 42px;
+    border-radius: 8px;
+    border: 1px dashed rgba(90,95,110,0.45);
+    background: rgba(29,31,45,0.55);
+    position: relative; overflow: hidden;
+    transition: border-color 0.25s, background 0.25s, transform 0.25s;
+  }
+
+  .slot.filled { border-style: solid; background: rgba(255,255,255,0.05); }
+
+  .block {
+    width: 100%; height: 100%;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; font-weight: 700; color: #fff;
+    border: 1px solid rgba(255,255,255,0.12);
+    transition: transform 0.25s, box-shadow 0.25s, opacity 0.25s;
+  }
+
+  .block.transient { border-style: dashed; filter: saturate(0.95); }
+  .block.small { font-size: 0.9rem; }
+
+  .block.pulse {
+    transform: scale(1.06);
+    box-shadow: 0 0 0 3px rgba(183,201,255,0.72), 0 0 0 7px rgba(137,167,255,0.24);
+  }
+
+  .block.updated {
+    box-shadow: 0 0 0 3px rgba(136,212,156,0.78), 0 0 0 7px rgba(136,212,156,0.24);
+  }
+
+  .mem-bar-wrap {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+
+  .mem-bar {
+    flex: 1;
+    height: 10px;
+    border-radius: 5px;
+    background: rgba(40,42,55,0.9);
+    overflow: hidden;
+  }
+
+  .mem-fill {
+    height: 100%;
+    border-radius: 5px;
+    transition: width 0.4s, background 0.3s;
+    background: var(--accent);
+  }
+
+  .mem-fill.high { background: #e0626e; }
+
+  .skipped-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(107,196,141,0.18);
+    color: #8d8;
+    font-weight: 600;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  .controls {
+    margin-top: 18px;
+    display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
+  }
+
+  button {
+    font-family: inherit; font-size: 1.5rem; font-weight: 600;
+    padding: 10px 22px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer;
+    transition: background 0.15s;
+  }
+  button:hover { background: #23273a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+
+  .status-wrap {
+    margin-top: 14px;
+    width: min(1080px, 100%);
+    background: rgba(22,24,33,0.86);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+
+  #status { font-size: 1.7rem; font-weight: 700; margin-bottom: 4px; }
+  #detail { font-size: 1.2rem; color: var(--muted); line-height: 1.5; }
+  #detail:empty { display: none; }
+
+  @media (max-width: 980px) {
+    .hbm-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Reshard After Forward</h1>
+<p class="subtitle">
+  RAF frees AllGathered parameters after forward, saving memory but requiring a second AllGather for backward.
+  NRAF keeps them, trading memory for less communication. &nbsp;Paper § 3.1, § 5.2.
+</p>
+
+<div id="stage"></div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">Prev</button>
+  <button id="btn-step">Step</button>
+  <button id="btn-reset">Reset</button>
+</div>
+
+<div class="status-wrap">
+  <div id="status">Ready</div>
+  <div id="detail">Step through forward and backward to see how RAF and NRAF differ in memory usage and communication.</div>
+</div>
+
+<script>
+const U1_COLOR = { bg: "linear-gradient(135deg, #34b3a4, #2a8f83)", solid: "#2f9d90" };
+const U2_COLOR = { bg: "linear-gradient(135deg, #d4785c, #b8604a)", solid: "#c96f4f" };
+const ACT_COLOR = { bg: "linear-gradient(135deg, #5d82db, #4767b7)", solid: "#5678cc" };
+const GRAD_COLOR = { bg: "linear-gradient(135deg, #7b86a8, #646e91)", solid: "#6f7a9d" };
+
+const MODES = ["raf", "nraf"];
+
+const els = {};
+
+function createSlot() {
+  const s = document.createElement("div");
+  s.className = "slot";
+  return s;
+}
+
+function fillSlot(slot, label, bgStyle, extraClass = "") {
+  slot.innerHTML = "";
+  slot.classList.add("filled");
+  const b = document.createElement("div");
+  b.className = `block ${extraClass}`.trim();
+  b.textContent = label;
+  b.style.background = bgStyle;
+  slot.appendChild(b);
+  return b;
+}
+
+function clearSlot(slot) {
+  slot.innerHTML = "";
+  slot.classList.remove("filled");
+}
+
+function highlightBuffer(buf) { buf.classList.add("highlight"); }
+function clearHighlights() {
+  document.querySelectorAll(".buffer.highlight").forEach(b => b.classList.remove("highlight"));
+  document.querySelectorAll(".block.pulse").forEach(b => b.classList.remove("pulse"));
+  document.querySelectorAll(".block.updated").forEach(b => b.classList.remove("updated"));
+}
+
+function setMem(mode, filled) {
+  const pct = (filled / 2) * 100;
+  els[mode].memFill.style.width = pct + "%";
+  els[mode].memFill.classList.toggle("high", filled >= 2);
+  els[mode].memLabel.textContent = `Model buf: ${filled}/2 units`;
+}
+
+function buildDOM() {
+  const stage = document.getElementById("stage");
+  stage.innerHTML = "";
+
+  MODES.forEach(mode => {
+    const card = document.createElement("div");
+    card.className = "mode-card";
+
+    const hdr = document.createElement("div");
+    hdr.className = "card-header";
+    const isRaf = mode === "raf";
+    hdr.innerHTML = `<div class="card-title">${isRaf ? "RAF" : "NRAF"}</div>
+      <span class="tag ${isRaf ? "mem" : "comm"}">${isRaf ? "less memory" : "less comm"}</span>`;
+    card.appendChild(hdr);
+
+    const sub = document.createElement("div");
+    sub.className = "card-sub";
+    sub.textContent = isRaf ? "Reshard After Forward" : "No Reshard After Forward";
+    card.appendChild(sub);
+
+    const grid = document.createElement("div");
+    grid.className = "hbm-grid";
+
+    const persistent = document.createElement("div");
+    persistent.className = "memory-group persistent";
+    persistent.innerHTML = '<div class="group-title">Persistent</div>';
+
+    const transient = document.createElement("div");
+    transient.className = "memory-group transient";
+    transient.innerHTML = '<div class="group-title">Transient</div>';
+
+    els[mode] = {};
+
+    // Param shards
+    const paramSec = document.createElement("div"); paramSec.className = "section";
+    paramSec.innerHTML = '<div class="section-label">Param Shards</div>';
+    const paramBuf = document.createElement("div"); paramBuf.className = "buffer";
+    const ps1 = createSlot(); const ps2 = createSlot();
+    fillSlot(ps1, "s₁", U1_COLOR.bg);
+    fillSlot(ps2, "s₂", U2_COLOR.bg);
+    paramBuf.appendChild(ps1); paramBuf.appendChild(ps2);
+    paramSec.appendChild(paramBuf);
+    persistent.appendChild(paramSec);
+    els[mode].paramBuf = paramBuf;
+    els[mode].paramSlots = [ps1, ps2];
+
+    // Grad shards
+    const gradSec = document.createElement("div"); gradSec.className = "section";
+    gradSec.innerHTML = '<div class="section-label">Grad Shards</div>';
+    const gradBuf = document.createElement("div"); gradBuf.className = "buffer";
+    const gs1 = createSlot(); const gs2 = createSlot();
+    gradBuf.appendChild(gs1); gradBuf.appendChild(gs2);
+    gradSec.appendChild(gradBuf);
+    persistent.appendChild(gradSec);
+    els[mode].gradBuf = gradBuf;
+    els[mode].gradSlots = [gs1, gs2];
+
+    // Model buffer
+    const modelSec = document.createElement("div"); modelSec.className = "section";
+    modelSec.innerHTML = '<div class="section-label">Model Buffer</div>';
+    const modelBuf = document.createElement("div"); modelBuf.className = "buffer transient-buffer";
+    const ms1 = createSlot(); const ms2 = createSlot();
+    modelBuf.appendChild(ms1); modelBuf.appendChild(ms2);
+    modelSec.appendChild(modelBuf);
+    transient.appendChild(modelSec);
+    els[mode].modelBuf = modelBuf;
+    els[mode].modelSlots = [ms1, ms2];
+
+    // Activations
+    const actSec = document.createElement("div"); actSec.className = "section";
+    actSec.innerHTML = '<div class="section-label">Activations</div>';
+    const actBuf = document.createElement("div"); actBuf.className = "buffer transient-buffer";
+    const as1 = createSlot(); const as2 = createSlot();
+    actBuf.appendChild(as1); actBuf.appendChild(as2);
+    actSec.appendChild(actBuf);
+    transient.appendChild(actSec);
+    els[mode].actBuf = actBuf;
+    els[mode].actSlots = [as1, as2];
+
+    grid.appendChild(persistent);
+    grid.appendChild(transient);
+    card.appendChild(grid);
+
+    // Memory bar
+    const memWrap = document.createElement("div");
+    memWrap.className = "mem-bar-wrap";
+    const memLabel = document.createElement("span");
+    memLabel.textContent = "Model buf: 0/2 units";
+    const memBar = document.createElement("div"); memBar.className = "mem-bar";
+    const memFill = document.createElement("div"); memFill.className = "mem-fill";
+    memFill.style.width = "0";
+    memBar.appendChild(memFill);
+    memWrap.appendChild(memLabel);
+    memWrap.appendChild(memBar);
+    card.appendChild(memWrap);
+    els[mode].memFill = memFill;
+    els[mode].memLabel = memLabel;
+
+    stage.appendChild(card);
+  });
+}
+
+function sleep(ms) {
+  if (renderMode === "instant" || skipRequested) return Promise.resolve();
+  return new Promise(resolve => {
+    const tid = setTimeout(resolve, ms);
+    const check = () => {
+      if (skipRequested || renderMode === "instant") { clearTimeout(tid); resolve(); return; }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+}
+
+const DUR = { short: 250, medium: 500 };
+
+function allGather(mode, unitIdx) {
+  const color = unitIdx === 0 ? U1_COLOR : U2_COLOR;
+  const label = unitIdx === 0 ? "U1" : "U2";
+  const slot = els[mode].modelSlots[unitIdx];
+  highlightBuffer(els[mode].modelBuf);
+  els[mode].paramSlots[unitIdx].querySelector(".block")?.classList.add("pulse");
+  const b = fillSlot(slot, label, color.bg, "transient");
+  b.classList.add("pulse");
+}
+
+function fwdCompute(mode, unitIdx) {
+  const label = unitIdx === 0 ? "act₁" : "act₂";
+  highlightBuffer(els[mode].actBuf);
+  highlightBuffer(els[mode].modelBuf);
+  els[mode].modelSlots[unitIdx].querySelector(".block")?.classList.add("pulse");
+  const b = fillSlot(els[mode].actSlots[unitIdx], label, ACT_COLOR.bg, "transient small");
+  b.classList.add("pulse");
+}
+
+function freeModelSlot(mode, unitIdx) {
+  clearSlot(els[mode].modelSlots[unitIdx]);
+}
+
+function bwdCompute(mode, unitIdx) {
+  const color = unitIdx === 0 ? U1_COLOR : U2_COLOR;
+  const label = unitIdx === 0 ? "∇₁" : "∇₂";
+  highlightBuffer(els[mode].modelBuf);
+  highlightBuffer(els[mode].actBuf);
+  highlightBuffer(els[mode].gradBuf);
+  els[mode].modelSlots[unitIdx].querySelector(".block")?.classList.add("pulse");
+  els[mode].actSlots[unitIdx].querySelector(".block")?.classList.add("pulse");
+  const b = fillSlot(els[mode].gradSlots[unitIdx], label, color.bg, "small");
+  b.classList.add("updated");
+}
+
+function reduceScatter(mode, unitIdx) {
+  clearSlot(els[mode].modelSlots[unitIdx]);
+  clearSlot(els[mode].actSlots[unitIdx]);
+}
+
+const STEPS = [
+  {
+    title: "AllGather U1",
+    detail: "Gather U1's full parameters into the model buffer. Identical in both modes.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => { allGather(m, 0); setMem(m, 1); });
+    }
+  },
+  {
+    title: "Forward compute U1",
+    detail: "Run forward for U1, saving activations for backward. Both modes behave the same.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => fwdCompute(m, 0));
+    }
+  },
+  {
+    title: "Post-forward U1",
+    detail: "RAF frees the model buffer — only the shard remains. NRAF keeps the full params resident for backward later.",
+    run() {
+      clearHighlights();
+      freeModelSlot("raf", 0); setMem("raf", 0);
+      highlightBuffer(els.nraf.modelBuf);
+      els.nraf.modelSlots[0].querySelector(".block")?.classList.add("pulse");
+    }
+  },
+  {
+    title: "AllGather U2",
+    detail: "Gather U2's full parameters. In NRAF, both units' params are now in the model buffer — peak transient memory.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => allGather(m, 1));
+      setMem("raf", 1);
+      setMem("nraf", 2);
+    }
+  },
+  {
+    title: "Forward compute U2",
+    detail: "Forward for U2, saving activations. After forward, RAF frees the buffer again.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => fwdCompute(m, 1));
+      freeModelSlot("raf", 1); setMem("raf", 0);
+    }
+  },
+  {
+    title: "Backward U2: AllGather?",
+    detail: "RAF must re-AllGather U2's params (extra communication). NRAF still has them — no AllGather needed.",
+    run() {
+      clearHighlights();
+      allGather("raf", 1); setMem("raf", 1);
+      highlightBuffer(els.nraf.modelBuf);
+      els.nraf.modelSlots[1].querySelector(".block")?.classList.add("pulse");
+    }
+  },
+  {
+    title: "Backward compute U2 → ReduceScatter",
+    detail: "Compute gradients for U2, then ReduceScatter to produce gradient shards. Free U2's model buffer and activations.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => bwdCompute(m, 1));
+      MODES.forEach(m => { reduceScatter(m, 1); setMem(m, m === "nraf" ? 1 : 0); });
+    }
+  },
+  {
+    title: "Backward U1: AllGather?",
+    detail: "RAF must re-AllGather U1 (its second AllGather this iteration). NRAF still has U1's params — skips the AllGather entirely.",
+    run() {
+      clearHighlights();
+      allGather("raf", 0); setMem("raf", 1);
+      highlightBuffer(els.nraf.modelBuf);
+      els.nraf.modelSlots[0].querySelector(".block")?.classList.add("pulse");
+    }
+  },
+  {
+    title: "Backward compute U1 → ReduceScatter",
+    detail: "Compute gradients for U1, ReduceScatter, free everything. Both modes end with the same state: gradient shards ready for optimizer.",
+    run() {
+      clearHighlights();
+      MODES.forEach(m => bwdCompute(m, 0));
+      MODES.forEach(m => { reduceScatter(m, 0); setMem(m, 0); });
+    }
+  },
+];
+
+const statusEl = document.getElementById("status");
+const detailEl = document.getElementById("detail");
+let currentStep = -1;
+let animating = false;
+let skipRequested = false;
+let renderMode = "animate";
+
+function executeStep(idx) {
+  const step = STEPS[idx];
+  step.run();
+  statusEl.textContent = `${idx + 1}/${STEPS.length}  ${step.title}`;
+  detailEl.textContent = step.detail;
+}
+
+function resetAll() {
+  currentStep = -1;
+  clearHighlights();
+  MODES.forEach(m => {
+    els[m].modelSlots.forEach(clearSlot);
+    els[m].actSlots.forEach(clearSlot);
+    els[m].gradSlots.forEach(clearSlot);
+    setMem(m, 0);
+  });
+  statusEl.textContent = "Ready";
+  detailEl.textContent = "Step through forward and backward to see how RAF and NRAF differ in memory usage and communication.";
+}
+
+function refreshControls() {
+  document.getElementById("btn-prev").disabled = animating || currentStep <= 0;
+}
+
+async function playAll() {
+  if (animating) { skipRequested = true; return; }
+  animating = true; refreshControls();
+  if (currentStep >= STEPS.length - 1) { resetAll(); await sleep(300); }
+  while (currentStep < STEPS.length - 1) {
+    currentStep++;
+    executeStep(currentStep);
+    await sleep(1200);
+  }
+  animating = false; refreshControls();
+}
+
+function stepOnce() {
+  if (animating) { skipRequested = true; return; }
+  currentStep++;
+  if (currentStep >= STEPS.length) { resetAll(); refreshControls(); return; }
+  executeStep(currentStep);
+  refreshControls();
+}
+
+function stepPrev() {
+  if (animating || currentStep <= 0) return;
+  const target = currentStep - 1;
+  const oldRM = renderMode;
+  renderMode = "instant";
+  resetAll();
+  for (let i = 0; i <= target; i++) {
+    currentStep = i;
+    executeStep(i);
+  }
+  clearHighlights();
+  STEPS[target].run();
+  renderMode = oldRM;
+  refreshControls();
+}
+
+document.getElementById("btn-play").addEventListener("click", playAll);
+document.getElementById("btn-step").addEventListener("click", stepOnce);
+document.getElementById("btn-prev").addEventListener("click", stepPrev);
+document.getElementById("btn-reset").addEventListener("click", () => { if (!animating) { resetAll(); refreshControls(); } });
+
+buildDOM();
+resetAll();
+refreshControls();
+</script>
+</body>
+</html>
