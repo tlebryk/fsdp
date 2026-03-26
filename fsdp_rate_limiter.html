@@ -73,6 +73,15 @@
     padding: 20px 24px 16px;
     background: rgba(18,20,28,0.92);
     box-shadow: 0 18px 40px rgba(0,0,0,0.24);
+    transition: opacity 0.25s ease, transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  }
+  .gantt-panel.active {
+    border-color: rgba(214,219,242,0.32);
+    box-shadow: 0 22px 44px rgba(0,0,0,0.28), 0 0 0 1px rgba(214,219,242,0.08);
+  }
+  .gantt-panel.inactive {
+    opacity: 0.42;
+    transform: scale(0.992);
   }
 
   .panel-header {
@@ -826,7 +835,7 @@ function setInflight(elId, count, isHigh) {
   el.className = "inflight-val " + (isHigh ? "high" : "ok");
 }
 
-const STEPS = [
+const BASE_STEPS = [
   {
     title: "C₀ Is Still Computing",
     detail: "C₀ is active in both panels. AG₀ and AG₁ each occupy 1 producer-owned block, and C₀ holds 1 consumer block on the right. There are still 2 free blocks, so nothing is fragmented yet.",
@@ -1028,33 +1037,73 @@ const STEPS = [
   },
 ];
 
+const TOTAL_STEPS = BASE_STEPS.length * 2;
+
 const statusEl = document.getElementById("status");
 const detailEl = document.getElementById("detail");
 let currentStep = -1;
 let animating = false;
 let skipRequested = false;
 
+function makeFreeSlots() {
+  return Array.from({ length: TOTAL_MEM }, () => slotEntry("free", "free"));
+}
+
+function renderPanelInitial(prefix) {
+  renderMemBar(`${prefix}-membar`, `${prefix}-memlabels`, { slots: makeFreeSlots(), retry: false });
+  setInflight(`${prefix}-inflight`, 0, false);
+}
+
+function renderNoLimiterFinal() {
+  renderMemBar("nl-membar", "nl-memlabels", {
+    slots: [3, 2, consumerEntry("A₁"), consumerEntry("A₀"), consumerEntry("C₁")],
+    retry: true
+  });
+  setInflight("nl-inflight", 2, false);
+}
+
+function setActivePanel(prefix) {
+  const nlPanel = document.getElementById("panel-nl");
+  const rlPanel = document.getElementById("panel-rl");
+  nlPanel.classList.toggle("active", prefix === "nl");
+  nlPanel.classList.toggle("inactive", prefix !== "nl");
+  rlPanel.classList.toggle("active", prefix === "rl");
+  rlPanel.classList.toggle("inactive", prefix !== "rl");
+}
+
 function showStep(idx) {
-  const s = STEPS[idx];
-  const activeCompute = new Set(s.activeCompute || []);
+  const phase = idx < BASE_STEPS.length ? "nl" : "rl";
+  const localIdx = phase === "nl" ? idx : idx - BASE_STEPS.length;
+  const s = BASE_STEPS[localIdx];
+  const activeCompute = new Set((s.activeCompute || []).filter(key => key.startsWith(`${phase}-`)));
+  const nlVisibleIdx = phase === "nl" ? localIdx : Number.POSITIVE_INFINITY;
+  const rlVisibleIdx = phase === "rl" ? localIdx : -1;
   allBlocks.forEach(b => {
-    b.el.classList.toggle("visible", b.step <= idx);
+    const visibleIdx = b.trackId.startsWith("nl-") ? nlVisibleIdx : rlVisibleIdx;
+    b.el.classList.toggle("visible", b.step <= visibleIdx);
     b.el.classList.remove("highlight");
     b.el.classList.toggle("active-consumer", activeCompute.has(b.blockKey));
   });
-  allBlocks.filter(b => b.step === idx).forEach(b => b.el.classList.add("highlight"));
+  allBlocks
+    .filter(b => b.trackId.startsWith(`${phase}-`) && b.step === localIdx)
+    .forEach(b => b.el.classList.add("highlight"));
   s.run();
-  if (statusEl) statusEl.textContent = `${idx + 1}/${STEPS.length}  ${s.title}`;
+  if (phase === "nl") {
+    renderPanelInitial("rl");
+  } else {
+    renderNoLimiterFinal();
+  }
+  setActivePanel(phase);
+  if (statusEl) statusEl.textContent = `${idx + 1}/${TOTAL_STEPS}  ${s.title}`;
   if (detailEl) detailEl.textContent = s.detail;
 }
 
 function resetViz() {
   currentStep = -1;
   allBlocks.forEach(b => b.el.classList.remove("visible", "highlight", "active-consumer"));
-  renderMemBar("nl-membar", "nl-memlabels", { producer: [], consumer: 0, retry: false });
-  renderMemBar("rl-membar", "rl-memlabels", { producer: [], consumer: 0, retry: false });
-  setInflight("nl-inflight", 0, false);
-  setInflight("rl-inflight", 0, false);
+  renderPanelInitial("nl");
+  renderPanelInitial("rl");
+  setActivePanel("nl");
   setPhase("nl", "consumer idle", "nothing reusable", "waiting");
   setPhase("rl", "consumer idle", "nothing reusable", "waiting");
   if (statusEl) statusEl.textContent = "Ready";
@@ -1077,8 +1126,8 @@ function refreshControls() {
 async function playAll() {
   if (animating) { skipRequested = true; return; }
   animating = true; refreshControls();
-  if (currentStep >= STEPS.length - 1) { resetViz(); await sleep(300); }
-  while (currentStep < STEPS.length - 1) {
+  if (currentStep >= TOTAL_STEPS - 1) { resetViz(); await sleep(300); }
+  while (currentStep < TOTAL_STEPS - 1) {
     currentStep++;
     showStep(currentStep);
     await sleep(1900);
@@ -1089,7 +1138,7 @@ async function playAll() {
 function stepOnce() {
   if (animating) { skipRequested = true; return; }
   currentStep++;
-  if (currentStep >= STEPS.length) { resetViz(); refreshControls(); return; }
+  if (currentStep >= TOTAL_STEPS) { resetViz(); refreshControls(); return; }
   showStep(currentStep);
   refreshControls();
 }

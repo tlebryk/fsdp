@@ -618,110 +618,151 @@ async function animateBackwardCompute(mode, unitIdx) {
 
 /* ── Steps ─────────────────────────────────────────────── */
 
+const MODE_SEQUENCE = ["raf", "nraf"];
+const MODE_LABELS = { raf: "RAF", nraf: "NRAF" };
+
+function highlightResidentParams(mode, unitIdx) {
+  CONFIG.ranks.forEach(rank => {
+    highlightBuf(els[mode][rank].modelBuf);
+    const offset = modelSlotOffset(mode, unitIdx);
+    CONFIG.units[unitIdx].params.forEach((_, pIdx) => {
+      els[mode][rank].modelSlots[offset + pIdx].querySelector(".block")?.classList.add("pulse");
+    });
+  });
+}
+
+function highlightResidentModelBuf(mode) {
+  CONFIG.ranks.forEach(rank => {
+    highlightBuf(els[mode][rank].modelBuf);
+    els[mode][rank].modelSlots.forEach(slot => slot.querySelector(".block")?.classList.add("pulse"));
+  });
+}
+
 const STEPS = [
   {
     title: "AllGather Unit 1",
-    detail: "s₁ flies from rank 0 and s₂ flies from rank 1 into every rank's model buffer. Identical in both modes.",
-    async run() {
+    detail: {
+      raf: "Gather s₁ and s₂ into RAF's shared model buffer.",
+      nraf: "Gather s₁ and s₂ into NRAF's model buffer.",
+    },
+    async run(mode) {
       clearHighlights();
-      await Promise.all(MODES.map(m => animateGather(m, 0)));
+      await animateGather(mode, 0);
     },
   },
   {
     title: "Forward compute Unit 1",
-    detail: "Run forward using the gathered params (s₁, s₂), saving activations. Both modes behave identically.",
-    async run() {
+    detail: {
+      raf: "Run forward for Unit 1 and save act₁.",
+      nraf: "Run forward for Unit 1 and save act₁.",
+    },
+    async run(mode) {
       clearHighlights();
-      await Promise.all(MODES.map(m => animateForward(m, 0)));
+      await animateForward(mode, 0);
     },
   },
   {
     title: "Post-forward Unit 1",
-    detail: "RAF frees the model buffer — only each rank's original shard remains. NRAF keeps s₁, s₂ resident for backward.",
-    run() {
+    detail: {
+      raf: "RAF immediately frees the gathered params for Unit 1.",
+      nraf: "NRAF keeps Unit 1's gathered params resident for backward.",
+    },
+    run(mode) {
       clearHighlights();
-      freeModelBuf("raf", 0);
-      CONFIG.ranks.forEach(rank => {
-        highlightBuf(els.nraf[rank].modelBuf);
-        const offset = modelSlotOffset("nraf", 0);
-        CONFIG.units[0].params.forEach((_, pIdx) => {
-          els.nraf[rank].modelSlots[offset + pIdx].querySelector(".block")?.classList.add("pulse");
-        });
-      });
+      if (mode === "raf") {
+        freeModelBuf(mode, 0);
+        return;
+      }
+      highlightResidentParams(mode, 0);
     },
   },
   {
     title: "AllGather Unit 2",
-    detail: "Gather s₃ and s₄. NRAF now has all 4 model buffer slots filled (s₁, s₂, s₃, s₄) — peak transient memory. RAF reuses the same 2 slots.",
-    async run() {
+    detail: {
+      raf: "RAF reuses the same two model-buffer slots for s₃ and s₄.",
+      nraf: "NRAF gathers s₃ and s₄ into the second half of its four-slot model buffer.",
+    },
+    async run(mode) {
       clearHighlights();
-      await Promise.all(MODES.map(m => animateGather(m, 1)));
+      await animateGather(mode, 1);
     },
   },
   {
     title: "Forward compute Unit 2",
-    detail: "Forward for Unit 2, saving activations.",
-    async run() {
+    detail: {
+      raf: "Run forward for Unit 2 and save act₂.",
+      nraf: "Run forward for Unit 2 and save act₂.",
+    },
+    async run(mode) {
       clearHighlights();
-      await Promise.all(MODES.map(m => animateForward(m, 1)));
+      await animateForward(mode, 1);
     },
   },
   {
     title: "Post-forward Unit 2",
-    detail: "RAF frees the model buffer again (0 slots used). NRAF keeps all 4 slots — both units' params are fully materialized.",
-    run() {
+    detail: {
+      raf: "RAF frees the model buffer again after Unit 2 forward.",
+      nraf: "NRAF keeps both units' params materialized, reaching peak transient memory.",
+    },
+    run(mode) {
       clearHighlights();
-      freeModelBuf("raf", 1);
-      CONFIG.ranks.forEach(rank => {
-        highlightBuf(els.nraf[rank].modelBuf);
-        els.nraf[rank].modelSlots.forEach(s => s.querySelector(".block")?.classList.add("pulse"));
-      });
+      if (mode === "raf") {
+        freeModelBuf(mode, 1);
+        return;
+      }
+      highlightResidentModelBuf(mode);
     },
   },
   {
     title: "Backward Unit 2: AllGather?",
-    detail: "RAF must re-AllGather s₃, s₄ — extra communication. NRAF already has them in the model buffer, no AllGather needed.",
-    async run() {
+    detail: {
+      raf: "RAF must AllGather s₃ and s₄ again before Unit 2 backward.",
+      nraf: "NRAF skips the re-AllGather because Unit 2's params are still resident.",
+    },
+    async run(mode) {
       clearHighlights();
-      CONFIG.ranks.forEach(rank => {
-        highlightBuf(els.nraf[rank].modelBuf);
-        const offset = modelSlotOffset("nraf", 1);
-        CONFIG.units[1].params.forEach((_, pIdx) => {
-          els.nraf[rank].modelSlots[offset + pIdx].querySelector(".block")?.classList.add("pulse");
-        });
-      });
-      await animateGather("raf", 1);
+      if (mode === "raf") {
+        await animateGather(mode, 1);
+        return;
+      }
+      highlightResidentParams(mode, 1);
     },
   },
   {
     title: "Backward compute U2 → ReduceScatter",
-    detail: "Compute gradients for Unit 2 using s₃, s₄ and act₂. ReduceScatter produces gradient shards. Free model buffer and activations.",
-    async run() {
+    detail: {
+      raf: "Compute Unit 2 backward, emit grad shards, and free transient state.",
+      nraf: "Compute Unit 2 backward, emit grad shards, and free Unit 2 transient state.",
+    },
+    async run(mode) {
       clearHighlights();
-      await Promise.all(MODES.map(m => animateBackwardCompute(m, 1)));
+      await animateBackwardCompute(mode, 1);
     },
   },
   {
     title: "Backward Unit 1: AllGather?",
-    detail: "RAF must re-AllGather s₁, s₂ (its second extra AllGather this iteration). NRAF still has them — skips entirely.",
-    async run() {
+    detail: {
+      raf: "RAF must AllGather s₁ and s₂ again for Unit 1 backward.",
+      nraf: "NRAF still has Unit 1's params, so this step is just a reuse highlight.",
+    },
+    async run(mode) {
       clearHighlights();
-      CONFIG.ranks.forEach(rank => {
-        highlightBuf(els.nraf[rank].modelBuf);
-        const offset = modelSlotOffset("nraf", 0);
-        CONFIG.units[0].params.forEach((_, pIdx) => {
-          els.nraf[rank].modelSlots[offset + pIdx].querySelector(".block")?.classList.add("pulse");
-        });
-      });
-      await animateGather("raf", 0);
+      if (mode === "raf") {
+        await animateGather(mode, 0);
+        return;
+      }
+      highlightResidentParams(mode, 0);
     },
   },
   {
     title: "Backward compute U1 → ReduceScatter",
-    detail: "Compute gradients for Unit 1, ReduceScatter, free everything. Both modes end with gradient shards ready for the optimizer. RAF used 4 AllGathers, NRAF used 2.",
-    async run() {
+    detail: {
+      raf: "RAF finishes with gradient shards ready for the optimizer after 4 AllGathers.",
+      nraf: "NRAF finishes with gradient shards ready for the optimizer after 2 AllGathers.",
+    },
+    async run(mode) {
       clearHighlights();
-      await Promise.all(MODES.map(m => animateBackwardCompute(m, 0)));
+      await animateBackwardCompute(mode, 0);
     },
   },
 ];
@@ -730,16 +771,30 @@ const STEPS = [
 
 const statusEl = document.getElementById("status");
 const detailEl = document.getElementById("detail");
+let phase = 0;
 let currentStep = -1;
 let animating = false;
 
-function showStep(idx) {
+function showStep(mode, idx) {
   const s = STEPS[idx];
-  if (statusEl) statusEl.textContent = `${idx + 1}/${STEPS.length}  ${s.title}`;
-  if (detailEl) detailEl.textContent = s.detail;
+  if (statusEl) statusEl.textContent = `${idx + 1}/${STEPS.length}  ${MODE_LABELS[mode]}: ${s.title}`;
+  if (detailEl) detailEl.textContent = s.detail[mode];
+}
+
+function currentMode() {
+  return MODE_SEQUENCE[phase];
+}
+
+function atBeginning() {
+  return phase === 0 && currentStep <= 0;
+}
+
+function atEnd() {
+  return phase === MODE_SEQUENCE.length - 1 && currentStep >= STEPS.length - 1;
 }
 
 function resetAll() {
+  phase = 0;
   currentStep = -1;
   clearHighlights();
   MODES.forEach(m => {
@@ -761,43 +816,71 @@ function resetAll() {
 }
 
 function refreshControls() {
-  document.getElementById("btn-prev").disabled = animating || currentStep <= 0;
+  document.getElementById("btn-prev").disabled = animating || atBeginning();
 }
 
 async function playAll() {
   if (animating) { skipRequested = true; return; }
-  animating = true; refreshControls();
-  if (currentStep >= STEPS.length - 1) { resetAll(); await sleep(300); }
-  while (currentStep < STEPS.length - 1) {
-    currentStep++;
-    showStep(currentStep);
-    await STEPS[currentStep].run();
-    await sleep(800);
+  animating = true;
+  skipRequested = false;
+  refreshControls();
+  if (atEnd()) { resetAll(); await sleep(300); }
+  while (true) {
+    const mode = currentMode();
+    if (currentStep < STEPS.length - 1) {
+      currentStep++;
+      showStep(mode, currentStep);
+      await STEPS[currentStep].run(mode);
+      await sleep(800);
+      continue;
+    }
+    if (phase < MODE_SEQUENCE.length - 1) {
+      phase++;
+      currentStep = -1;
+      continue;
+    }
+    break;
   }
   animating = false; skipRequested = false; refreshControls();
 }
 
 async function stepOnce() {
   if (animating) { skipRequested = true; return; }
+  skipRequested = false;
+  if (atEnd()) { resetAll(); refreshControls(); return; }
+  if (currentStep >= STEPS.length - 1 && phase < MODE_SEQUENCE.length - 1) {
+    phase++;
+    currentStep = -1;
+  }
   currentStep++;
-  if (currentStep >= STEPS.length) { resetAll(); refreshControls(); return; }
   animating = true; refreshControls();
-  showStep(currentStep);
-  await STEPS[currentStep].run();
+  const mode = currentMode();
+  showStep(mode, currentStep);
+  await STEPS[currentStep].run(mode);
   animating = false; skipRequested = false; refreshControls();
 }
 
 async function stepPrev() {
-  if (animating || currentStep <= 0) return;
-  const target = currentStep - 1;
+  if (animating || atBeginning()) return;
+  let targetPhase = phase;
+  let targetStep = currentStep - 1;
+  if (targetStep < 0) {
+    targetPhase--;
+    targetStep = STEPS.length - 1;
+  }
   animating = true;
   const oldRM = renderMode;
   renderMode = "instant";
   resetAll();
-  for (let i = 0; i <= target; i++) {
-    currentStep = i;
-    showStep(i);
-    await STEPS[i].run();
+  phase = targetPhase;
+  for (let p = 0; p <= targetPhase; p++) {
+    const mode = MODE_SEQUENCE[p];
+    const lastStep = p === targetPhase ? targetStep : STEPS.length - 1;
+    for (let i = 0; i <= lastStep; i++) {
+      currentStep = i;
+      showStep(mode, i);
+      await STEPS[i].run(mode);
+    }
   }
   renderMode = oldRM;
   animating = false;
