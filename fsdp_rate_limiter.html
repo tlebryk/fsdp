@@ -209,6 +209,28 @@
     z-index: 1;
   }
   .gpu-mem-seg.producer { border-right: 1px solid rgba(0,0,0,0.3); }
+  .gpu-mem-seg.producer-edge::after {
+    content: "";
+    position: absolute;
+    top: 1px;
+    right: -1px;
+    width: 8px;
+    height: calc(100% - 2px);
+    background: linear-gradient(180deg, rgba(255,243,190,1), rgba(255,176,92,0.98));
+    box-shadow: 0 0 0 1px rgba(255,226,153,0.95), 0 0 18px rgba(255,188,92,0.9);
+    z-index: 10;
+  }
+  .gpu-mem-seg.consumer-edge::before {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: -1px;
+    width: 8px;
+    height: calc(100% - 2px);
+    background: linear-gradient(180deg, rgba(222,255,232,1), rgba(107,196,141,0.98));
+    box-shadow: 0 0 0 1px rgba(214,255,225,0.98), 0 0 18px rgba(107,196,141,0.95);
+    z-index: 10;
+  }
   .gpu-mem-seg.prod-cache {
     background: rgba(120,120,140,0.22);
     color: rgba(231,232,236,0.78);
@@ -240,6 +262,11 @@
   .gpu-mem-seg.consumer.saved {
     background: rgba(107,196,141,0.82);
     color: #f4fff7;
+  }
+  .gpu-mem-seg.consumer-free {
+    background: rgba(107,196,141,0.16);
+    color: rgba(214,255,225,0.72);
+    box-shadow: inset 0 0 0 2px rgba(107,196,141,0.55);
   }
   .gpu-mem-seg.consumer.active {
     background: linear-gradient(180deg, #7fe3a2, #58b97b);
@@ -290,6 +317,78 @@
     70% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5))); opacity: 1; }
     85% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5) - 6px)); opacity: 1; }
     100% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5))); opacity: 0.2; }
+  }
+  .gpu-realloc-target {
+    position: absolute;
+    top: 2px;
+    left: calc(var(--target-col) * (100% / 5) + 3px);
+    width: calc((100% / 5) - 6px);
+    height: calc(100% - 4px);
+    border-radius: 6px;
+    border: 2px dashed rgba(198,255,214,0.98);
+    background: rgba(107,196,141,0.14);
+    box-shadow: 0 0 14px rgba(107,196,141,0.45);
+    z-index: 8;
+    pointer-events: none;
+    animation: retryTargetPulse 1.1s ease-in-out infinite;
+  }
+  .gpu-realloc-fill {
+    position: absolute;
+    top: 3px;
+    left: calc(var(--col) * (100% / 5) + 3px);
+    width: calc((100% / 5) - 6px);
+    height: calc(100% - 6px);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 800;
+    background: linear-gradient(180deg, #7fe3a2, #58b97b);
+    color: #08120c;
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,0.45), 0 0 16px rgba(107,196,141,0.55);
+    z-index: 9;
+    pointer-events: none;
+    animation: retryFillIn 1.2s ease-out infinite;
+  }
+  .gpu-realloc-block {
+    position: absolute;
+    top: 3px;
+    left: calc(var(--from-col) * (100% / 5) + 3px);
+    width: calc((100% / 5) - 6px);
+    height: calc(100% - 6px);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #fff;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.28);
+    z-index: 9;
+    pointer-events: none;
+    animation: reallocMove 1.5s ease-in-out infinite;
+  }
+  .gpu-realloc-block.consumer {
+    background: linear-gradient(180deg, #7fe3a2, #58b97b);
+    color: #08120c;
+  }
+  @keyframes retryTargetPulse {
+    0%, 100% { opacity: 0.65; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.04); }
+  }
+  @keyframes reallocMove {
+    0% { transform: translateX(0) translateY(0) rotate(0deg); opacity: 0; }
+    15% { opacity: 1; }
+    45% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5) * 0.55)) translateY(-20px) rotate(-4deg); opacity: 1; }
+    80% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5))) translateY(0) rotate(0deg); opacity: 1; }
+    100% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5))) translateY(0) rotate(0deg); opacity: 0.22; }
+  }
+  @keyframes retryFillIn {
+    0% { opacity: 0; transform: scale(0.82); }
+    35% { opacity: 0; transform: scale(0.82); }
+    65% { opacity: 1; transform: scale(1.04); }
+    100% { opacity: 0.88; transform: scale(1); }
   }
 
   .inflight-row {
@@ -502,6 +601,10 @@ function consumerEntry(label, active = false) {
   return { label, active, kind: "consumer" };
 }
 
+function consumerFreeEntry(label = "") {
+  return { label, kind: "consumer-free" };
+}
+
 function slotEntry(label, kind, options = {}) {
   return { label, kind, ...options };
 }
@@ -600,14 +703,23 @@ function renderMemBar(barId, labelId, state) {
   bar.classList.toggle("retrying", retrying);
 
   const slots = state.slots || [];
+  const resolvedSlots = slots.map(entry => typeof entry === "number" ? agEntry(entry) : entry);
+  const producerIndices = [];
+  const consumerIndices = [];
+  resolvedSlots.forEach((resolved, idx) => {
+    if (!resolved) return;
+    if (resolved.kind === "ag" || resolved.kind === "cache") producerIndices.push(idx);
+    if (resolved.kind === "consumer" || resolved.kind === "consumer-free") consumerIndices.push(idx);
+  });
+  const lastProducerIdx = producerIndices.length ? producerIndices[producerIndices.length - 1] : -1;
+  const firstConsumerIdx = consumerIndices.length ? consumerIndices[0] : -1;
   let prodBlocks = 0;
   let consUnits = 0;
   let freeUnits = 0;
   const consumerLabels = [];
 
-  slots.forEach((entry, idx) => {
+  resolvedSlots.forEach((resolved, idx) => {
     const seg = document.createElement("div");
-    const resolved = typeof entry === "number" ? agEntry(entry) : entry;
     if (!resolved || resolved.kind === "free") {
       seg.className = "gpu-mem-seg free";
       seg.textContent = "free";
@@ -626,12 +738,17 @@ function renderMemBar(barId, labelId, state) {
       seg.textContent = resolved.label;
       consUnits++;
       consumerLabels.push(resolved.label);
+    } else if (resolved.kind === "consumer-free") {
+      seg.className = "gpu-mem-seg consumer-free";
+      seg.textContent = resolved.label;
     } else {
       seg.className = "gpu-mem-seg free";
       seg.textContent = resolved.label || "free";
       freeUnits++;
     }
     seg.style.flexBasis = `${(BUFFER_BLOCKS / TOTAL_MEM) * 100}%`;
+    if (idx === lastProducerIdx) seg.classList.add("producer-edge");
+    if (idx === firstConsumerIdx) seg.classList.add("consumer-edge");
     if (state.blockedTarget === idx) {
       seg.classList.add("blocked-target");
       const x = document.createElement("div");
@@ -649,6 +766,33 @@ function renderMemBar(barId, labelId, state) {
     attempt.style.setProperty("--to-col", String(state.attempt.to));
     attempt.textContent = `${state.attempt.label} →`;
     bar.appendChild(attempt);
+  }
+
+  if (state.realloc && state.realloc.target !== undefined) {
+    const target = document.createElement("div");
+    target.className = "gpu-realloc-target";
+    target.style.setProperty("--target-col", String(state.realloc.target));
+    bar.appendChild(target);
+  }
+
+  if (state.realloc && state.realloc.fill) {
+    const fill = document.createElement("div");
+    fill.className = "gpu-realloc-fill";
+    fill.style.setProperty("--col", String(state.realloc.fill.col));
+    fill.textContent = state.realloc.fill.label;
+    bar.appendChild(fill);
+  }
+
+  if (state.realloc && state.realloc.moves) {
+    state.realloc.moves.forEach(move => {
+      const block = document.createElement("div");
+      block.className = `gpu-realloc-block ${move.consumer ? "consumer" : ""}`;
+      block.style.setProperty("--from-col", String(move.from));
+      block.style.setProperty("--to-col", String(move.to));
+      if (move.color) block.style.background = move.color;
+      block.textContent = move.label;
+      bar.appendChild(block);
+    });
   }
 
   // Labels
@@ -821,6 +965,65 @@ const STEPS = [
       });
       setInflight("rl-inflight", 1, false);
       setPhase("rl", "C₁ ended", "AG₁ free(p) only", "A₁ fits before C₁ frees");
+    },
+  },
+  {
+    title: "cudaMalloc Retry",
+    detail: "After the blocked write, cudaMalloc retry compacts the producer-owned region first.",
+    activeCompute: [],
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", {
+        slots: [3, 2, slotEntry("free", "free"), consumerEntry("A₀"), consumerEntry("C₁")],
+        retry: true,
+        realloc: null
+      });
+      setInflight("nl-inflight", 2, false);
+      setPhase("nl", "retry", "compact", "AG₂ slides left");
+      renderMemBar("rl-membar", "rl-memlabels", {
+        slots: [2, cacheEntry("AG₁ free"), consumerEntry("A₁"), consumerEntry("A₀"), consumerEntry("C₁")],
+        retry: false
+      });
+      setInflight("rl-inflight", 1, false);
+      setPhase("rl", "steady", "", "");
+    },
+  },
+  {
+    title: "Retry Reassigns The Free Slot",
+    detail: "Once the producer region is compacted, the newly empty third block is reclassified for the consumer stream.",
+    activeCompute: [],
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", {
+        slots: [3, 2, consumerFreeEntry(), consumerEntry("A₀"), consumerEntry("C₁")],
+        retry: true
+      });
+      setInflight("nl-inflight", 2, false);
+      setPhase("nl", "retry", "boundary moves", "slot now belongs to consumer");
+      renderMemBar("rl-membar", "rl-memlabels", {
+        slots: [2, cacheEntry("AG₁ free"), consumerEntry("A₁"), consumerEntry("A₀"), consumerEntry("C₁")],
+        retry: false
+      });
+      setInflight("rl-inflight", 1, false);
+      setPhase("rl", "steady", "", "");
+    },
+  },
+  {
+    title: "A₁ Writes After Retry",
+    detail: "With the boundary moved, the consumer can finally write A₁ into the newly reassigned third block.",
+    activeCompute: [],
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", {
+        slots: [3, 2, consumerEntry("A₁"), consumerEntry("A₀"), consumerEntry("C₁")],
+        attempt: { label: "A₁", from: 4, to: 2, blocked: false },
+        retry: true
+      });
+      setInflight("nl-inflight", 2, false);
+      setPhase("nl", "retry", "consumer writes", "A₁ fits now");
+      renderMemBar("rl-membar", "rl-memlabels", {
+        slots: [2, cacheEntry("AG₁ free"), consumerEntry("A₁"), consumerEntry("A₀"), consumerEntry("C₁")],
+        retry: false
+      });
+      setInflight("rl-inflight", 1, false);
+      setPhase("rl", "steady", "", "");
     },
   },
 ];
