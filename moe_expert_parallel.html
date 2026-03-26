@@ -326,12 +326,12 @@
   <div id="detail"></div>
 </div>
 
-<p class="provenance">
+<!-- <p class="provenance">
   <strong>Note:</strong> The FSDP paper (VLDB 2023) does not describe MoE or expert parallelism.
   For sparse parameters (e.g. DHEN embeddings), the paper uses an ignore-list so FSDP only handles dense layers, while a separate system shards the sparse tables.
   This visualization depicts <strong>dp2ep expert parallelism</strong> from PyTorch's <strong>torchtitan</strong> (2024–25), which composes with FSDP on a 2D device mesh.
   With more ranks, each expert column would itself use intra-column FSDP (AllGather → GEMM → ReduceScatter) — simplified here to 1 rank per column.
-</p>
+</p> -->
 
 <script>
 const ATTN_COLOR = {

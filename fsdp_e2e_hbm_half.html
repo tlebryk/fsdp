@@ -61,50 +61,6 @@
     font-weight: 600;
   }
 
-  .timeline {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 24px;
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-
-  .phase-pill {
-    padding: 10px 14px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: rgba(26, 29, 39, 0.92);
-    color: var(--muted);
-    min-width: 132px;
-    text-align: center;
-    transition: border-color 0.25s, box-shadow 0.25s, color 0.25s, background 0.25s;
-  }
-
-  .phase-pill .phase-name {
-    display: block;
-    font-size: 1.4rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 3px;
-  }
-
-  .phase-pill .phase-step {
-    font-size: 1.5rem;
-  }
-
-  .phase-pill.active {
-    color: var(--text);
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px rgba(137, 167, 255, 0.25), 0 14px 28px rgba(0, 0, 0, 0.18);
-    background: rgba(26, 29, 39, 1);
-  }
-
-  .phase-pill.done {
-    color: #cbd3ee;
-    border-color: rgba(137, 167, 255, 0.35);
-  }
-
   #stage {
     position: relative;
     width: min(1180px, 100%);
@@ -472,22 +428,7 @@
 <body>
 
 <h1>FSDP End-to-End HBM (mixed precision)</h1>
-<p class="page-note">Same timeline as the FP32-only demo: resident sharded <span class="tag-fp32">FlatParameter</span>, materialized <span class="tag-fp32">∇ shards</span>, and <span class="tag-fp32">optimizer state</span> stay full precision. Only the <em>dynamically allocated</em> unsharded tensor and full-gradient workspace use <span class="tag-fp16">FP16/BF16</span>—half the slot size here—matching the paper’s peak-memory <span class="tag-fp16">K<sub>low</sub></span> term and low-precision collectives.</p>
-<div class="timeline">
-  <div class="phase-pill" id="phase-forward">
-    <span class="phase-name">Forward</span>
-    <span class="phase-step" id="phase-forward-step">Awaiting U1</span>
-  </div>
-  <div class="phase-pill" id="phase-backward">
-    <span class="phase-name">Backward</span>
-    <span class="phase-step" id="phase-backward-step">Waiting</span>
-  </div>
-  <div class="phase-pill" id="phase-optimizer">
-    <span class="phase-name">Optimizer</span>
-    <span class="phase-step" id="phase-optimizer-step">Waiting</span>
-  </div>
-</div>
-
+<p class="page-note">Same memory flow as the FP32-only demo: resident sharded <span class="tag-fp32">FlatParameter</span>, materialized <span class="tag-fp32">∇ shards</span>, and <span class="tag-fp32">optimizer state</span> stay full precision. Only the <em>dynamically allocated</em> unsharded tensor and full-gradient workspace use <span class="tag-fp16">FP16/BF16</span>—half the slot size here—matching the paper’s peak-memory <span class="tag-fp16">K<sub>low</sub></span> term and low-precision collectives.</p>
 <div id="stage"></div>
 
 <div class="controls">
@@ -578,16 +519,6 @@ const gradBuffers = {};
 const optSlotEls = {};
 const optBlockEls = {};
 const optBuffers = {};
-const phaseEls = {
-  forward: document.getElementById("phase-forward"),
-  backward: document.getElementById("phase-backward"),
-  optimizer: document.getElementById("phase-optimizer"),
-};
-const phaseTextEls = {
-  forward: document.getElementById("phase-forward-step"),
-  backward: document.getElementById("phase-backward-step"),
-  optimizer: document.getElementById("phase-optimizer-step"),
-};
 
 const DUR = {
   fly: 850,
@@ -781,17 +712,7 @@ function scheduleSkippable(callback, ms) {
   requestAnimationFrame(watchSkip);
 }
 
-function setPhaseState(activePhase, stepText) {
-  const forwardDone = activePhase === "backward" || activePhase === "optimizer";
-  const backwardDone = activePhase === "optimizer";
-  Object.entries(phaseEls).forEach(([phase, el]) => {
-    el.classList.toggle("active", phase === activePhase);
-    el.classList.toggle("done", (phase === "forward" && forwardDone) || (phase === "backward" && backwardDone));
-  });
-  if (stepText.forward) phaseTextEls.forward.textContent = stepText.forward;
-  if (stepText.backward) phaseTextEls.backward.textContent = stepText.backward;
-  if (stepText.optimizer) phaseTextEls.optimizer.textContent = stepText.optimizer;
-}
+function setPhaseState() {}
 
 function setStatus(title, detail) {
   statusEl.textContent = `${currentStep + 1}/${STEPS.length}  ${title}`;
@@ -1158,12 +1079,6 @@ function resetMemoryState() {
     CONFIG.units.forEach(unit => clearSlot(activationSlots[rank][unit.id]));
   });
   Object.values(gradSlots).forEach(clearSlot);
-  phaseEls.forward.classList.remove("active", "done");
-  phaseEls.backward.classList.remove("active", "done");
-  phaseEls.optimizer.classList.remove("active", "done");
-  phaseTextEls.forward.textContent = "Awaiting U1";
-  phaseTextEls.backward.textContent = "Waiting";
-  phaseTextEls.optimizer.textContent = "Waiting";
 }
 
 const STEPS = [

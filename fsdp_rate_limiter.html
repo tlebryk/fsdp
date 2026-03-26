@@ -20,6 +20,8 @@
     --u1: #d4855c;
     --u2: #a87bd4;
     --u3: #5d82db;
+    --u4: #4fb8b8;
+    --u5: #9eb85b;
     --consumer: #6bc48d;
     --cpu: #89a7ff;
   }
@@ -122,6 +124,18 @@
     box-shadow: 0 0 0 3px rgba(255,255,255,0.45), 0 0 16px rgba(137,167,255,0.3);
     z-index: 5;
   }
+  .gblock.active-consumer {
+    box-shadow: 0 0 0 4px rgba(107,196,141,0.98), 0 0 28px rgba(107,196,141,0.82), inset 0 0 0 2px rgba(255,255,255,0.45);
+    outline: 3px solid rgba(195,255,215,0.85);
+    outline-offset: 1px;
+    filter: saturate(1.35) brightness(1.18) contrast(1.05);
+    z-index: 6;
+    animation: consumerPulse 0.9s ease-in-out infinite;
+  }
+  @keyframes consumerPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.04); }
+  }
   .gblock.cpu-thin { height: 26px; top: 7px; font-size: 0.78rem; }
 
   .stream-sep {
@@ -143,10 +157,46 @@
   .gpu-mem-bar {
     display: flex;
     height: 32px;
+    position: relative;
     border-radius: 8px;
     overflow: hidden;
     border: 1px solid var(--border);
     background: rgba(20,22,32,0.9);
+    transition: box-shadow 0.35s, border-color 0.35s;
+  }
+  .gpu-mem-bar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc((100% / 5) - 1px),
+      rgba(255,255,255,0.12) calc((100% / 5) - 1px),
+      rgba(255,255,255,0.12) calc(100% / 5)
+    );
+    z-index: 4;
+  }
+  .gpu-mem-bar.retrying {
+    border-color: rgba(192,64,64,0.8);
+    box-shadow: 0 0 0 1px rgba(192,64,64,0.55), 0 0 18px rgba(192,64,64,0.22);
+  }
+  .gpu-mem-bar.retrying::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 18px;
+    background: repeating-linear-gradient(
+      45deg,
+      rgba(192,64,64,0.9),
+      rgba(192,64,64,0.9) 4px,
+      rgba(160,48,48,0.9) 4px,
+      rgba(160,48,48,0.9) 8px
+    );
+    z-index: 5;
   }
   .gpu-mem-seg {
     display: flex; align-items: center; justify-content: center;
@@ -155,13 +205,47 @@
     overflow: hidden;
     white-space: nowrap;
     min-width: 0;
+    position: relative;
+    z-index: 1;
   }
   .gpu-mem-seg.producer { border-right: 1px solid rgba(0,0,0,0.3); }
+  .gpu-mem-seg.prod-cache {
+    background: rgba(120,120,140,0.22);
+    color: rgba(231,232,236,0.78);
+    border-right: 1px dashed rgba(255,255,255,0.2);
+  }
+  .gpu-mem-seg.blocked-target {
+    outline: 3px solid rgba(224,98,110,0.95);
+    outline-offset: -3px;
+  }
+  .gpu-blocked-x {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 1.4rem;
+    font-weight: 900;
+    text-shadow: 0 0 12px rgba(224,98,110,0.95);
+    background: rgba(224,98,110,0.18);
+    z-index: 7;
+    pointer-events: none;
+  }
   .gpu-mem-seg.stream-wall {
     flex-basis: 4px !important; min-width: 4px; max-width: 4px;
     background: repeating-linear-gradient(0deg, rgba(255,255,255,0.5), rgba(255,255,255,0.5) 3px, transparent 3px, transparent 6px);
   }
   .gpu-mem-seg.consumer { background: var(--consumer); }
+  .gpu-mem-seg.consumer.saved {
+    background: rgba(107,196,141,0.82);
+    color: #f4fff7;
+  }
+  .gpu-mem-seg.consumer.active {
+    background: linear-gradient(180deg, #7fe3a2, #58b97b);
+    color: #08120c;
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,0.5), 0 0 16px rgba(107,196,141,0.65);
+  }
   .gpu-mem-seg.free { background: rgba(40,42,55,0.7); color: rgba(255,255,255,0.3); }
   .gpu-mem-seg.retry {
     background: repeating-linear-gradient(
@@ -186,6 +270,27 @@
     overflow: hidden;
     white-space: nowrap;
   }
+  .gpu-attempt {
+    position: absolute;
+    top: -22px;
+    left: calc((var(--from-col) + 0.5) * (100% / 5) - 20px);
+    min-width: 40px;
+    text-align: center;
+    font-size: 0.78rem;
+    font-weight: 800;
+    color: #fff;
+    z-index: 8;
+    pointer-events: none;
+    animation: attemptMove 1.1s ease-in-out infinite;
+  }
+  .gpu-attempt.blocked { color: #ff9aa3; }
+  @keyframes attemptMove {
+    0% { transform: translateX(0); opacity: 0; }
+    15% { opacity: 1; }
+    70% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5))); opacity: 1; }
+    85% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5) - 6px)); opacity: 1; }
+    100% { transform: translateX(calc((var(--to-col) - var(--from-col)) * (100% / 5))); opacity: 0.2; }
+  }
 
   .inflight-row {
     margin-top: 6px;
@@ -201,6 +306,23 @@
   .inflight-val.high { color: #e88; }
   .inflight-val.ok { color: #8d8; }
 
+  .phase-row {
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .phase-chip {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    background: rgba(24,27,38,0.92);
+    border-radius: 999px;
+    padding: 5px 10px;
+    letter-spacing: 0.03em;
+  }
+
   .controls {
     display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-bottom: 14px;
   }
@@ -212,7 +334,7 @@
     transition: background 0.15s;
   }
   button:hover { background: #23273a; }
-  button:disabled { opacity: 0.4; cursor: default; }
+  button:disabled { opacity: 0.4; cursor: consumer; }
 
   .status-wrap {
     width: min(980px, 100%);
@@ -230,23 +352,24 @@
 <body>
 
 <h1>Rate Limiter</h1>
-<p class="subtitle">
-  FSDP allocates AllGather buffers in a <em>producer stream</em> (NCCL); forward/backward computation runs in a
-  <em>consumer stream</em> (default). The caching allocator assigns blocks <em>per-stream</em> — a block allocated for
+<!-- <p class="subtitle">
+  FSDP allocates AllGather buffers in a <em>producer stream</em> (producer); forward/backward computation runs in a
+  <em>consumer stream</em> (consumer). The caching allocator assigns blocks <em>per-stream</em> — a block allocated for
   the producer stream <strong>cannot be reused</strong> by the consumer stream, even after the AllGather finishes.
   If the CPU runs ahead and issues too many AllGathers, the producer stream claims too much of the total GPU memory,
   leaving insufficient room for the consumer to allocate activations — forcing a costly <code>cudaMalloc</code> retry
   (blocking <code>cudaFree</code>s to reset allocator state).
   The rate limiter caps in-flight AllGathers to 2, preventing over-allocation. &nbsp;Paper § 3.4.
-</p>
+</p> -->
 
 <div class="legend">
   <div class="legend-item"><div class="legend-swatch" style="background:var(--u0)"></div> Unit 0</div>
   <div class="legend-item"><div class="legend-swatch" style="background:var(--u1)"></div> Unit 1</div>
   <div class="legend-item"><div class="legend-swatch" style="background:var(--u2)"></div> Unit 2</div>
   <div class="legend-item"><div class="legend-swatch" style="background:var(--u3)"></div> Unit 3</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--u4)"></div> Unit 4</div>
   <div class="legend-item"><div class="legend-swatch" style="background:var(--consumer)"></div> Consumer workspace</div>
-  <div class="legend-item"><div class="legend-swatch idle"></div> CPU blocked</div>
+  <div class="legend-item"><div class="legend-swatch idle"></div> CPU blocked by limiter</div>
 </div>
 
 <div class="gantt-pair">
@@ -254,7 +377,7 @@
   <div class="gantt-panel" id="panel-nl">
     <div class="panel-header">
       <div class="panel-title">No Rate Limiter</div>
-      <div class="tag bad">unbounded in-flight</div>
+      <!-- <div class="tag bad">unbounded in-flight</div> -->
     </div>
     <div class="timeline">
       <div class="lane">
@@ -268,34 +391,39 @@
       <div class="lane">
         <div class="lane-label-wrap">
           <div class="lane-name">Producer</div>
-          <div class="lane-role">NCCL stream — alloc</div>
+          <div class="lane-role">producer stream — alloc</div>
         </div>
         <div class="lane-track" id="nl-comm"></div>
       </div>
       <div class="lane">
         <div class="lane-label-wrap">
           <div class="lane-name">Consumer</div>
-          <div class="lane-role">default stream — free</div>
+          <div class="lane-role">consumer stream — compute</div>
         </div>
         <div class="lane-track" id="nl-compute"></div>
       </div>
     </div>
     <div class="gpu-mem-section">
-      <div class="gpu-mem-title">GPU Memory — Caching Allocator</div>
+      <div class="gpu-mem-title">GPU Memory — Caching Allocator (5 equal blocks)</div>
       <div class="gpu-mem-bar" id="nl-membar"></div>
-      <div class="gpu-mem-labels" id="nl-memlabels"></div>
+      <!-- <div class="gpu-mem-labels" id="nl-memlabels"></div> -->
     </div>
     <div class="inflight-row">
       <span class="inflight-label">In-flight:</span>
       <span class="inflight-val" id="nl-inflight">0</span>
     </div>
+    <!-- <div class="phase-row">
+      <span class="phase-chip" id="nl-phase-consumer">consumer idle</span>
+      <span class="phase-chip" id="nl-phase-reuse">nothing reusable</span>
+      <span class="phase-chip" id="nl-phase-note">waiting</span>
+    </div> -->
   </div>
 
   <!-- Rate Limiter -->
   <div class="gantt-panel" id="panel-rl">
     <div class="panel-header">
       <div class="panel-title">Rate Limiter (limit = 2)</div>
-      <div class="tag good">bounded in-flight</div>
+      <!-- <div class="tag good">bounded in-flight</div> -->
     </div>
     <div class="timeline">
       <div class="lane">
@@ -309,27 +437,32 @@
       <div class="lane">
         <div class="lane-label-wrap">
           <div class="lane-name">Producer</div>
-          <div class="lane-role">NCCL stream — alloc</div>
+          <div class="lane-role">producer stream — alloc</div>
         </div>
         <div class="lane-track" id="rl-comm"></div>
       </div>
       <div class="lane">
         <div class="lane-label-wrap">
           <div class="lane-name">Consumer</div>
-          <div class="lane-role">default stream — free</div>
+          <div class="lane-role">consumer stream — compute</div>
         </div>
         <div class="lane-track" id="rl-compute"></div>
       </div>
     </div>
     <div class="gpu-mem-section">
-      <div class="gpu-mem-title">GPU Memory — Caching Allocator</div>
+      <div class="gpu-mem-title">GPU Memory — Caching Allocator (5 equal blocks)</div>
       <div class="gpu-mem-bar" id="rl-membar"></div>
-      <div class="gpu-mem-labels" id="rl-memlabels"></div>
+      <!-- <div class="gpu-mem-labels" id="rl-memlabels"></div> -->
     </div>
     <div class="inflight-row">
       <span class="inflight-label">In-flight:</span>
       <span class="inflight-val" id="rl-inflight">0</span>
     </div>
+    <!-- <div class="phase-row">
+      <span class="phase-chip" id="rl-phase-consumer">consumer idle</span>
+      <span class="phase-chip" id="rl-phase-reuse">nothing reusable</span>
+      <span class="phase-chip" id="rl-phase-note">waiting</span>
+    </div> -->
   </div>
 </div>
 
@@ -340,58 +473,81 @@
   <button id="btn-reset">Reset</button>
 </div>
 
-<div class="status-wrap">
+<!-- <div class="status-wrap">
   <div id="status">Ready</div>
-  <div id="detail">The caching allocator assigns blocks per-stream: NCCL-stream blocks can't be used by the default stream. Step through to see how over-allocating the NCCL stream starves the default stream.</div>
-</div>
+  <div id="detail">Assume 5 equal caching-allocator blocks. Each AllGather buffer takes 1 block, and each consumer phase uses 1 live block on the right. Step through to see C₀ stay active while extra AGs are issued, then watch AG₀ become reusable only after C₀ actually finishes.</div>
+</div> -->
 
 <script>
 const U = 36;
-const UNIT_RAW = ["#e0626e", "#d4855c", "#a87bd4", "#5d82db"];
+const UNIT_RAW = ["#e0626e", "#d4855c", "#a87bd4", "#5d82db", "#4fb8b8"];
 const CONSUMER_COLOR = "#6bc48d";
-const TOTAL_MEM = 10;
+const TOTAL_MEM = 5;
+const BUFFER_BLOCKS = 1;
+const CONSUMER_BLOCKS = 1;
+
+function toSubscript(n) {
+  return String(n).split("").map(ch => String.fromCharCode(0x2080 + Number(ch))).join("");
+}
+
+function agEntry(unitIdx) {
+  return { label: `AG${toSubscript(unitIdx)}`, color: UNIT_RAW[unitIdx], kind: "ag" };
+}
+
+function cacheEntry(label = "free(p)") {
+  return { label, kind: "cache" };
+}
+
+function consumerEntry(label, active = false) {
+  return { label, active, kind: "consumer" };
+}
+
+function slotEntry(label, kind, options = {}) {
+  return { label, kind, ...options };
+}
+
+function setPhase(prefix, consumer, reuse, note) {
+  const consumerEl = document.getElementById(`${prefix}-phase-consumer`);
+  const reuseEl = document.getElementById(`${prefix}-phase-reuse`);
+  const noteEl = document.getElementById(`${prefix}-phase-note`);
+  if (consumerEl) consumerEl.textContent = consumer;
+  if (reuseEl) reuseEl.textContent = reuse;
+  if (noteEl) noteEl.textContent = note;
+}
 
 const DATA = {
   nl: {
     cpu: [
-      { label: "AG₀", color: 0, cls: "cpu-thin", start: 0,  dur: 1, step: 0 },
-      { label: "AG₁", color: 1, cls: "cpu-thin", start: 1,  dur: 1, step: 0 },
-      { label: "AG₂", color: 2, cls: "cpu-thin", start: 2,  dur: 1, step: 0 },
-      { label: "AG₃", color: 3, cls: "cpu-thin", start: 3,  dur: 1, step: 0 },
+      { label: "AG₀", color: 0, cls: "cpu-thin", start: 0, dur: 1, step: 0 },
+      { label: "AG₁", color: 1, cls: "cpu-thin", start: 1, dur: 1, step: 0 },
+      { label: "AG₂", color: 2, cls: "cpu-thin", start: 2, dur: 1, step: 1 },
+      { label: "AG₃", color: 3, cls: "cpu-thin", start: 6, dur: 1, step: 5 },
     ],
     comm: [
-      { label: "AG₀", color: 0, cls: "", start: 0,  dur: 3, step: 1 },
-      { label: "AG₁", color: 1, cls: "", start: 3,  dur: 3, step: 2 },
-      { label: "AG₂", color: 2, cls: "", start: 6,  dur: 3, step: 3 },
-      { label: "AG₃", color: 3, cls: "", start: 9,  dur: 3, step: 4 },
+      { label: "AG₀", color: 0, cls: "", start: 0, dur: 3, step: 0 },
+      { label: "AG₁", color: 1, cls: "", start: 3, dur: 3, step: 5 },
     ],
     compute: [
-      { label: "C₀", color: 0, cls: "", start: 3,  dur: 2, step: 1 },
-      { label: "C₁", color: 1, cls: "", start: 6,  dur: 2, step: 2 },
-      { label: "C₂", color: 2, cls: "", start: 9,  dur: 2, step: 3 },
-      { label: "C₃", color: 3, cls: "", start: 12, dur: 2, step: 4 },
+      { label: "C₀", color: 0, cls: "", start: 3, dur: 2, step: 0 },
+      { label: "C₁", color: 1, cls: "", start: 6, dur: 2, step: 5 },
     ],
   },
   rl: {
     cpu: [
       { label: "AG₀",    color: 0, cls: "cpu-thin", start: 0, dur: 1, step: 0 },
       { label: "AG₁",    color: 1, cls: "cpu-thin", start: 1, dur: 1, step: 0 },
-      { label: "",        color:-1, cls: "idle cpu-thin", start: 2, dur: 3, step: 0 },
-      { label: "AG₂",    color: 2, cls: "cpu-thin", start: 5, dur: 1, step: 2 },
-      { label: "",        color:-1, cls: "idle cpu-thin", start: 6, dur: 2, step: 2 },
-      { label: "AG₃",    color: 3, cls: "cpu-thin", start: 8, dur: 1, step: 3 },
+      { label: "",        color:-1, cls: "idle cpu-thin", start: 2, dur: 2, step: 1 },
+      { label: "",        color:-1, cls: "idle cpu-thin", start: 4, dur: 2, step: 2 },
+      { label: "AG₂",    color: 2, cls: "cpu-thin", start: 6, dur: 1, step: 5 },
+      { label: "",        color:-1, cls: "idle cpu-thin", start: 7, dur: 2, step: 6 },
     ],
     comm: [
-      { label: "AG₀", color: 0, cls: "", start: 0, dur: 3, step: 1 },
-      { label: "AG₁", color: 1, cls: "", start: 3, dur: 3, step: 2 },
-      { label: "AG₂", color: 2, cls: "", start: 6, dur: 3, step: 3 },
-      { label: "AG₃", color: 3, cls: "", start: 9, dur: 3, step: 4 },
+      { label: "AG₀", color: 0, cls: "", start: 0, dur: 3, step: 0 },
+      { label: "AG₁", color: 1, cls: "", start: 3, dur: 3, step: 5 },
     ],
     compute: [
-      { label: "C₀", color: 0, cls: "", start: 3,  dur: 2, step: 1 },
-      { label: "C₁", color: 1, cls: "", start: 6,  dur: 2, step: 2 },
-      { label: "C₂", color: 2, cls: "", start: 9,  dur: 2, step: 3 },
-      { label: "C₃", color: 3, cls: "", start: 12, dur: 2, step: 4 },
+      { label: "C₀", color: 0, cls: "", start: 3, dur: 2, step: 0 },
+      { label: "C₁", color: 1, cls: "", start: 6, dur: 2, step: 5 },
     ],
   },
 };
@@ -407,6 +563,8 @@ function placeBlocks(trackId, blocks) {
     el.style.width = `${b.dur * U}px`;
     if (b.color >= 0) el.style.background = UNIT_RAW[b.color];
     track.appendChild(el);
+    b.trackId = trackId;
+    b.blockKey = `${trackId}:${b.label}`;
     b.el = el;
   });
 }
@@ -431,69 +589,91 @@ function buildAll() {
  * Shows per-stream block allocation: producer blocks (colored per-unit),
  * consumer workspace (green), free space (dark), or retry (red stripes).
  *
- * mem state: { producer: [unit indices], consumer: units, retry: bool }
+ * mem state: { producer: [unit indices], consumer: units, retry: bool, need?: units }
  */
 function renderMemBar(barId, labelId, state) {
   const bar = document.getElementById(barId);
   const labels = document.getElementById(labelId);
   bar.innerHTML = "";
-  labels.innerHTML = "";
+  if (labels) labels.innerHTML = "";
+  const retrying = !!state.retry;
+  bar.classList.toggle("retrying", retrying);
 
-  const prodUnits = state.producer.length;
-  const consUnits = state.consumer;
-  const retrying = state.retry;
-  const freeUnits = TOTAL_MEM - prodUnits * 2 - consUnits;
+  const slots = state.slots || [];
+  let prodBlocks = 0;
+  let consUnits = 0;
+  let freeUnits = 0;
+  const consumerLabels = [];
 
-  state.producer.forEach(unitIdx => {
+  slots.forEach((entry, idx) => {
     const seg = document.createElement("div");
-    seg.className = "gpu-mem-seg producer";
-    seg.style.flexBasis = `${(2 / TOTAL_MEM) * 100}%`;
-    seg.style.background = UNIT_RAW[unitIdx];
-    seg.textContent = `buf${unitIdx}`;
+    const resolved = typeof entry === "number" ? agEntry(entry) : entry;
+    if (!resolved || resolved.kind === "free") {
+      seg.className = "gpu-mem-seg free";
+      seg.textContent = "free";
+      freeUnits++;
+    } else if (resolved.kind === "ag") {
+      seg.className = "gpu-mem-seg producer";
+      seg.style.background = resolved.color;
+      seg.textContent = resolved.label;
+      prodBlocks++;
+    } else if (resolved.kind === "cache") {
+      seg.className = "gpu-mem-seg prod-cache";
+      seg.textContent = resolved.label;
+      prodBlocks++;
+    } else if (resolved.kind === "consumer") {
+      seg.className = `gpu-mem-seg consumer ${resolved.active ? "active" : "saved"}`;
+      seg.textContent = resolved.label;
+      consUnits++;
+      consumerLabels.push(resolved.label);
+    } else {
+      seg.className = "gpu-mem-seg free";
+      seg.textContent = resolved.label || "free";
+      freeUnits++;
+    }
+    seg.style.flexBasis = `${(BUFFER_BLOCKS / TOTAL_MEM) * 100}%`;
+    if (state.blockedTarget === idx) {
+      seg.classList.add("blocked-target");
+      const x = document.createElement("div");
+      x.className = "gpu-blocked-x";
+      x.textContent = "X";
+      seg.appendChild(x);
+    }
     bar.appendChild(seg);
   });
 
-  if (prodUnits > 0 && (consUnits > 0 || retrying || freeUnits > 0)) {
-    const wall = document.createElement("div");
-    wall.className = "gpu-mem-seg stream-wall";
-    wall.title = "stream boundary — blocks can't cross";
-    bar.appendChild(wall);
-  }
-
-  if (retrying) {
-    const seg = document.createElement("div");
-    seg.className = "gpu-mem-seg retry";
-    seg.style.flexBasis = `${((consUnits + Math.max(0, freeUnits)) / TOTAL_MEM) * 100}%`;
-    seg.textContent = "⚡ cudaMalloc retry";
-    bar.appendChild(seg);
-  } else {
-    if (consUnits > 0) {
-      const seg = document.createElement("div");
-      seg.className = "gpu-mem-seg consumer";
-      seg.style.flexBasis = `${(consUnits / TOTAL_MEM) * 100}%`;
-      seg.textContent = "activations";
-      bar.appendChild(seg);
-    }
-    if (freeUnits > 0) {
-      const seg = document.createElement("div");
-      seg.className = "gpu-mem-seg free";
-      seg.style.flexBasis = `${(freeUnits / TOTAL_MEM) * 100}%`;
-      seg.textContent = "free";
-      bar.appendChild(seg);
-    }
+  if (state.attempt) {
+    const attempt = document.createElement("div");
+    attempt.className = `gpu-attempt ${state.attempt.blocked ? "blocked" : ""}`;
+    attempt.style.setProperty("--from-col", String(state.attempt.from));
+    attempt.style.setProperty("--to-col", String(state.attempt.to));
+    attempt.textContent = `${state.attempt.label} →`;
+    bar.appendChild(attempt);
   }
 
   // Labels
-  if (prodUnits > 0) {
+  if (prodBlocks > 0) {
     const l = document.createElement("span");
-    l.style.flexBasis = `${(prodUnits * 2 / TOTAL_MEM) * 100}%`;
-    l.textContent = `← owned by NCCL stream (${prodUnits * 2}/${TOTAL_MEM})`;
-    labels.appendChild(l);
+    l.style.flexBasis = `${(prodBlocks / TOTAL_MEM) * 100}%`;
+    l.textContent = `← producer owns ${prodBlocks}/${TOTAL_MEM} blocks`;
+    if (labels) labels.appendChild(l);
   }
   const rest = document.createElement("span");
-  rest.style.flexBasis = `${((TOTAL_MEM - prodUnits * 2) / TOTAL_MEM) * 100}%`;
-  rest.textContent = retrying ? "← default stream can't allocate!" : (consUnits > 0 ? `← available to default stream (${consUnits}/${TOTAL_MEM})` : "");
-  labels.appendChild(rest);
+  rest.style.flexBasis = `${((TOTAL_MEM - prodBlocks) / TOTAL_MEM) * 100}%`;
+  const consumerSummary = consumerLabels.join(" + ");
+  if (retrying) {
+    const need = state.need ?? consUnits;
+    rest.textContent = `← ${consumerSummary || "consumer"} live; free blocks: ${Math.max(0, freeUnits)}; next request needs ${need}`;
+  } else if (consUnits > 0 && freeUnits > 0) {
+    rest.textContent = `← free blocks in the middle: ${freeUnits}; ${consumerSummary} live`;
+  } else if (consUnits > 0) {
+    rest.textContent = `← ${consumerSummary} live`;
+  } else if (freeUnits > 0) {
+    rest.textContent = `← free blocks: ${freeUnits}`;
+  } else {
+    rest.textContent = "";
+  }
+  if (labels) labels.appendChild(rest);
 }
 
 function setInflight(elId, count, isHigh) {
@@ -504,63 +684,143 @@ function setInflight(elId, count, isHigh) {
 
 const STEPS = [
   {
-    title: "CPU issues AllGathers",
-    detail: "No limiter: CPU fires AG₀–AG₃ instantly — the caching allocator assigns 4 buffers to the NCCL stream pool before the GPU executes any. These blocks are owned by the NCCL stream and cannot be used by the default stream, even once the AllGather finishes. Rate limiter: CPU issues AG₀, AG₁ (in-flight = 2 = limit), then blocks.",
+    title: "C₀ Is Still Computing",
+    detail: "C₀ is active in both panels. AG₀ and AG₁ each occupy 1 producer-owned block, and C₀ holds 1 consumer block on the right. There are still 2 free blocks, so nothing is fragmented yet.",
+    activeCompute: ["nl-compute:C₀", "rl-compute:C₀"],
     run() {
-      renderMemBar("nl-membar", "nl-memlabels", { producer: [0,1,2,3], consumer: 0, retry: true });
-      setInflight("nl-inflight", 4, true);
-      renderMemBar("rl-membar", "rl-memlabels", { producer: [0,1], consumer: 3, retry: false });
-      setInflight("rl-inflight", 2, false);
-    },
-  },
-  {
-    title: "Producer: AG₀ executes → Consumer: C₀ starts",
-    detail: "AG₀ runs on the NCCL stream. When it completes, C₀ starts on the default stream, using the AllGathered params. But the default stream also needs to allocate workspace (activations). Without rate limiting, 4 NCCL-stream blocks have claimed all available GPU memory — the default stream's allocation fails, triggering a cudaMalloc retry.",
-    run() {
-      renderMemBar("nl-membar", "nl-memlabels", { producer: [0,1,2,3], consumer: 0, retry: true });
-      setInflight("nl-inflight", 4, true);
-      renderMemBar("rl-membar", "rl-memlabels", { producer: [0,1], consumer: 3, retry: false });
-      setInflight("rl-inflight", 2, false);
-    },
-  },
-  {
-    title: "Consumer: C₀ done → buf₀ freed",
-    detail: "C₀ finishes — buf₀ can be returned to the caching allocator. No limiter: 3 NCCL-stream blocks still remain, but memory pressure eases. Rate limiter: in-flight drops to 1, CPU unblocks and issues AG₂ — the allocator reuses the freed block for buf₂, keeping in-flight at 2. The NCCL stream never owns more than 2 blocks at once.",
-    run() {
-      renderMemBar("nl-membar", "nl-memlabels", { producer: [1,2,3], consumer: 2, retry: false });
-      setInflight("nl-inflight", 3, true);
-      renderMemBar("rl-membar", "rl-memlabels", { producer: [1,2], consumer: 3, retry: false });
-      setInflight("rl-inflight", 2, false);
-    },
-  },
-  {
-    title: "Consumer: C₁ done → buf₁ freed",
-    detail: "C₁ frees buf₁. No limiter: 2 NCCL-stream blocks remain. Rate limiter: in-flight drops to 1, CPU issues AG₃ → back to 2. The rate limiter ensures the NCCL stream never owns more than 2 blocks, leaving the rest of GPU memory available for the default stream.",
-    run() {
-      renderMemBar("nl-membar", "nl-memlabels", { producer: [2,3], consumer: 3, retry: false });
+      renderMemBar("nl-membar", "nl-memlabels", { slots: [0, 1, slotEntry("free", "free"), slotEntry("free", "free"), consumerEntry("C₀", true)], retry: false });
       setInflight("nl-inflight", 2, false);
-      renderMemBar("rl-membar", "rl-memlabels", { producer: [2,3], consumer: 3, retry: false });
+      setPhase("nl", "C₀ computing", "AG₀ not reusable", "2 free blocks");
+      renderMemBar("rl-membar", "rl-memlabels", { slots: [0, 1, slotEntry("free", "free"), slotEntry("free", "free"), consumerEntry("C₀", true)], retry: false });
       setInflight("rl-inflight", 2, false);
+      setPhase("rl", "C₀ computing", "AG₀ not reusable", "2 free blocks");
     },
   },
   {
-    title: "All units complete",
-    detail: "AG₂→C₂, AG₃→C₃ finish. Both modes complete the same GPU work. The rate limiter doesn't slow GPU throughput — it only prevents the CPU from running too far ahead of GPU execution.",
+    title: "While C₀ Computes, No Limiter Issues AG₂",
+    detail: "C₀ is still running, so AG₀ is not reusable yet. The no-limiter CPU keeps racing and issues AG₂ anyway, which claims 1 fresh producer block. The rate-limited CPU stays blocked, waiting for C₀ to finish.",
+    activeCompute: ["nl-compute:C₀", "rl-compute:C₀"],
     run() {
-      renderMemBar("nl-membar", "nl-memlabels", { producer: [], consumer: 0, retry: false });
-      setInflight("nl-inflight", 0, false);
-      renderMemBar("rl-membar", "rl-memlabels", { producer: [], consumer: 0, retry: false });
-      setInflight("rl-inflight", 0, false);
+      renderMemBar("nl-membar", "nl-memlabels", { slots: [0, 1, 2, slotEntry("free", "free"), consumerEntry("C₀", true)], retry: false });
+      setInflight("nl-inflight", 3, true);
+      setPhase("nl", "C₀ computing", "AG₀ not reusable", "AG₂ issued");
+      renderMemBar("rl-membar", "rl-memlabels", { slots: [0, 1, slotEntry("free", "free"), slotEntry("free", "free"), consumerEntry("C₀", true)], retry: false });
+      setInflight("rl-inflight", 2, false);
+      setPhase("rl", "C₀ computing", "AG₀ not reusable", "CPU blocked");
     },
   },
   {
-    title: "Summary: per-stream over-allocation",
-    detail: "Without rate limiting, the caching allocator assigns too many blocks to the NCCL stream pool. These blocks cannot be reused by the default stream — they belong to a different stream. At a global level, the default stream is starved of memory and its activation allocation fails, triggering a costly cudaMalloc retry (blocking cudaFrees to reset allocator state). The rate limiter keeps ≤ 2 in-flight AllGathers, so the NCCL stream never claims too much of the GPU's memory.",
+    title: "AG₀ Becomes Free First",
+    detail: "AG₀ becomes free on the producer stream, but the consumer still holds C₀'s old block on the right. This isolates the producer-side release before A₀ is written.",
+    activeCompute: [],
     run() {
-      renderMemBar("nl-membar", "nl-memlabels", { producer: [0,1,2,3], consumer: 0, retry: true });
-      setInflight("nl-inflight", 4, true);
-      renderMemBar("rl-membar", "rl-memlabels", { producer: [0,1], consumer: 3, retry: false });
+      renderMemBar("nl-membar", "nl-memlabels", {
+        slots: [cacheEntry("AG₀ free"), 1, 2, slotEntry("free", "free"), consumerEntry("C₀")],
+        retry: false
+      });
+      setInflight("nl-inflight", 3, true);
+      setPhase("nl", "C₀ ended", "AG₀ free(p) only", "C₀ block still occupied");
+      renderMemBar("rl-membar", "rl-memlabels", {
+        slots: [cacheEntry("AG₀ free"), 1, slotEntry("free", "free"), slotEntry("free", "free"), consumerEntry("C₀")],
+        retry: false
+      });
+      setInflight("rl-inflight", 1, false);
+      setPhase("rl", "C₀ ended", "AG₀ free(p) only", "C₀ block still occupied");
+    },
+  },
+  {
+    title: "A₀ Writes Left",
+    detail: "A₀ is written into a new consumer block to the left while C₀ still occupies the old rightmost consumer slot. The producer-free AG₀ block is not used for this consumer write.",
+    activeCompute: [],
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", {
+        slots: [cacheEntry("AG₀ free"), 1, 2, consumerEntry("A₀"), consumerEntry("C₀")],
+        attempt: { label: "A₀", from: 4, to: 3, blocked: false },
+        retry: false
+      });
+      setInflight("nl-inflight", 3, true);
+      setPhase("nl", "C₀ ended", "AG₀ free(p) only", "A₀ fits before C₀ frees");
+      renderMemBar("rl-membar", "rl-memlabels", {
+        slots: [cacheEntry("AG₀ free"), 1, slotEntry("free", "free"), consumerEntry("A₀"), consumerEntry("C₀")],
+        attempt: { label: "A₀", from: 4, to: 3, blocked: false },
+        retry: false
+      });
+      setInflight("rl-inflight", 1, false);
+      setPhase("rl", "C₀ ended", "AG₀ free(p) only", "A₀ fits before C₀ frees");
+    },
+  },
+  {
+    title: "C₀ Block Finally Frees",
+    detail: "Only after A₀ is written do we clear C₀'s old consumer block. That leaves the rightmost slot free for the next compute phase.",
+    activeCompute: [],
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", {
+        slots: [cacheEntry("AG₀ free"), 1, 2, consumerEntry("A₀"), slotEntry("free", "free")],
+        retry: false
+      });
+      setInflight("nl-inflight", 3, true);
+      setPhase("nl", "C₀ cleared", "AG₀ free(p) only", "ready to reuse");
+      renderMemBar("rl-membar", "rl-memlabels", {
+        slots: [cacheEntry("AG₀ free"), 1, slotEntry("free", "free"), consumerEntry("A₀"), slotEntry("free", "free")],
+        retry: false
+      });
+      setInflight("rl-inflight", 1, false);
+      setPhase("rl", "C₀ cleared", "AG₀ free(p) only", "ready to reuse");
+    },
+  },
+  {
+    title: "Both Reuse The Freed Slot",
+    detail: "On the next step, both panels reuse AG₀'s freed producer slot. The rate-limited side uses it for AG₂ and starts C₁ while keeping only 2 producer blocks live. The no-limiter side uses it for AG₃, so producer ownership reaches 3 of 5 blocks.",
+    activeCompute: ["nl-compute:C₁", "rl-compute:C₁"],
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", { slots: [3, 1, 2, consumerEntry("A₀"), consumerEntry("C₁", true)], retry: false });
+      setInflight("nl-inflight", 3, true);
+      setPhase("nl", "C₁ computing", "AG₀ reused by AG₃", "0 free blocks");
+      renderMemBar("rl-membar", "rl-memlabels", { slots: [2, 1, slotEntry("free", "free"), consumerEntry("A₀"), consumerEntry("C₁", true)], retry: false });
       setInflight("rl-inflight", 2, false);
+      setPhase("rl", "C₁ computing", "AG₀ reused by AG₂", "2 free blocks");
+    },
+  },
+  {
+    title: "AG₁ Becomes Free First",
+    detail: "AG₁ becomes free on the producer stream, but the consumer still holds C₁'s block on the right. This frame isolates the producer-side release before the activation write is attempted.",
+    activeCompute: [],
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", {
+        slots: [3, cacheEntry("AG₁ free"), 2, consumerEntry("A₀"), consumerEntry("C₁")],
+        retry: false
+      });
+      setInflight("nl-inflight", 3, true);
+      setPhase("nl", "C₁ ended", "AG₁ free(p) only", "C₁ block still occupied");
+      renderMemBar("rl-membar", "rl-memlabels", {
+        slots: [2, cacheEntry("AG₁ free"), slotEntry("free", "free"), consumerEntry("A₀"), consumerEntry("C₁")],
+        retry: false
+      });
+      setInflight("rl-inflight", 1, false);
+      setPhase("rl", "C₁ ended", "AG₁ free(p) only", "C₁ block still occupied");
+    },
+  },
+  {
+    title: "A₁ Tries To Write",
+    detail: "Now A₁ tries to write while C₁ still occupies the old consumer slot. On the no-limiter side, the visible AG₁ free block is producer-owned, so the write bounces and falls into retry. With the limiter, A₁ lands in a new consumer block to the left.",
+    activeCompute: [],
+    run() {
+      renderMemBar("nl-membar", "nl-memlabels", {
+        slots: [3, cacheEntry("AG₁ free"), 2, consumerEntry("A₀"), consumerEntry("C₁")],
+        attempt: { label: "A₁", from: 4, to: 1, blocked: true },
+        blockedTarget: 1,
+        retry: true,
+        need: CONSUMER_BLOCKS
+      });
+      setInflight("nl-inflight", 3, true);
+      setPhase("nl", "C₁ ended", "AG₁ free(p) only", "A₁ retries");
+      renderMemBar("rl-membar", "rl-memlabels", {
+        slots: [2, cacheEntry("AG₁ free"), consumerEntry("A₁"), consumerEntry("A₀"), consumerEntry("C₁")],
+        attempt: { label: "A₁", from: 4, to: 2, blocked: false },
+        retry: false
+      });
+      setInflight("rl-inflight", 1, false);
+      setPhase("rl", "C₁ ended", "AG₁ free(p) only", "A₁ fits before C₁ frees");
     },
   },
 ];
@@ -573,25 +833,29 @@ let skipRequested = false;
 
 function showStep(idx) {
   const s = STEPS[idx];
+  const activeCompute = new Set(s.activeCompute || []);
   allBlocks.forEach(b => {
     b.el.classList.toggle("visible", b.step <= idx);
     b.el.classList.remove("highlight");
+    b.el.classList.toggle("active-consumer", activeCompute.has(b.blockKey));
   });
   allBlocks.filter(b => b.step === idx).forEach(b => b.el.classList.add("highlight"));
   s.run();
-  statusEl.textContent = `${idx + 1}/${STEPS.length}  ${s.title}`;
-  detailEl.textContent = s.detail;
+  if (statusEl) statusEl.textContent = `${idx + 1}/${STEPS.length}  ${s.title}`;
+  if (detailEl) detailEl.textContent = s.detail;
 }
 
 function resetViz() {
   currentStep = -1;
-  allBlocks.forEach(b => b.el.classList.remove("visible", "highlight"));
+  allBlocks.forEach(b => b.el.classList.remove("visible", "highlight", "active-consumer"));
   renderMemBar("nl-membar", "nl-memlabels", { producer: [], consumer: 0, retry: false });
   renderMemBar("rl-membar", "rl-memlabels", { producer: [], consumer: 0, retry: false });
   setInflight("nl-inflight", 0, false);
   setInflight("rl-inflight", 0, false);
-  statusEl.textContent = "Ready";
-  detailEl.textContent = "The caching allocator assigns blocks per-stream: NCCL-stream blocks can't be used by the default stream. Step through to see how over-allocating the NCCL stream starves the default stream.";
+  setPhase("nl", "consumer idle", "nothing reusable", "waiting");
+  setPhase("rl", "consumer idle", "nothing reusable", "waiting");
+  if (statusEl) statusEl.textContent = "Ready";
+  if (detailEl) detailEl.textContent = "Assume 5 equal caching-allocator blocks. Each AllGather buffer takes 1 block, and each consumer phase uses 1 live block on the right. Step through to see C₀ stay active while extra AGs are issued, then watch AG₀ become reusable only after C₀ actually finishes.";
 }
 
 function sleep(ms) {
@@ -614,7 +878,7 @@ async function playAll() {
   while (currentStep < STEPS.length - 1) {
     currentStep++;
     showStep(currentStep);
-    await sleep(1600);
+    await sleep(1900);
   }
   animating = false; refreshControls();
 }

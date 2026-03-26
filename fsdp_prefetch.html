@@ -55,11 +55,11 @@
   .legend-swatch { width: 20px; height: 16px; border-radius: 4px; }
   .legend-swatch.idle { border: 1.5px dashed var(--idle-border); background: var(--idle-bg); }
 
-  .gantt-pair {
+  .gantt-stack {
     width: min(980px, 100%);
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 28px;
     margin-bottom: 22px;
   }
 
@@ -69,6 +69,10 @@
     padding: 20px 24px 18px;
     background: rgba(18, 20, 28, 0.92);
     box-shadow: 0 18px 40px rgba(0,0,0,0.24);
+  }
+
+  .gantt-panel.hidden {
+    display: none;
   }
 
   .panel-header {
@@ -204,9 +208,7 @@
 
 <h1>Backward Prefetching</h1>
 <p class="subtitle">
-  <!-- FSDP's collectives run sequentially in a single producer stream.
-  Without prefetch, the producer stream serializes ReduceScatter → AllGather, forcing the consumer stream to wait.
-  With prefetch, AllGather is issued <em>before</em> ReduceScatter, so the next unit's params are ready sooner. &nbsp;Paper § 3.3.2. -->
+  Step through the no-prefetch schedule first. Once that completes, the prefetch schedule appears below for a second pass with the same vertical lane alignment.
 </p>
 
 <div class="legend">
@@ -216,47 +218,47 @@
   <div class="legend-item"><div class="legend-swatch idle"></div> Idle</div>
 </div>
 
-<div class="gantt-pair">
+<div class="gantt-stack">
   <!-- No Prefetch -->
-  <div class="gantt-panel">
+  <div class="gantt-panel" id="np-panel">
     <div class="panel-header">
       <div class="panel-title">No Prefetch</div>
       <div class="tag slower">slower</div>
     </div>
     <div class="timeline">
       <div class="lane">
-        <div class="lane-label">consumer</div>
-        <div class="lane-track" id="np-compute"></div>
-      </div>
-      <div class="lane">
         <div class="lane-label">producer</div>
         <div class="lane-track" id="np-comm"></div>
       </div>
+      <div class="lane">
+        <div class="lane-label">consumer</div>
+        <div class="lane-track" id="np-compute"></div>
+      </div>
     </div>
     <div class="panel-footer">
-      <span>Total: <strong>21</strong> time units</span>
+      <span>Total: <strong>18</strong> time units</span>
       <div class="time-bar" id="np-bar" style="width:0;background:var(--ag)"></div>
     </div>
   </div>
 
-  <!-- With Prefetch -->
-  <div class="gantt-panel">
+  <!-- Prefetch -->
+  <div class="gantt-panel hidden" id="pf-panel">
     <div class="panel-header">
-      <div class="panel-title">With Prefetch</div>
+      <div class="panel-title">Prefetch</div>
       <div class="tag faster">faster</div>
     </div>
     <div class="timeline">
       <div class="lane">
-        <div class="lane-label">consumer</div>
-        <div class="lane-track" id="pf-compute"></div>
-      </div>
-      <div class="lane">
         <div class="lane-label">producer</div>
         <div class="lane-track" id="pf-comm"></div>
       </div>
+      <div class="lane">
+        <div class="lane-label">consumer</div>
+        <div class="lane-track" id="pf-compute"></div>
+      </div>
     </div>
     <div class="panel-footer">
-      <span>Total: <strong>17</strong> time units</span>
+      <span>Total: <strong>14</strong> time units</span>
       <div class="time-bar" id="pf-bar" style="width:0;background:var(--bwd)"></div>
     </div>
   </div>
@@ -271,55 +273,61 @@
 
 <div class="status-wrap">
   <div id="status">Ready</div>
-  <div id="detail">Step through to compare backward passes with and without prefetching. Idle gaps show where compute waits for comm.</div>
+  <div id="detail">Start with the no-prefetch schedule. After it completes, the prefetch schedule appears below.</div>
 </div>
 
 <script>
 const U = 38;
 
 /*
- * No Prefetch timeline (total 21 time units):
- *   AG2[0-2] → BWD2[2-5] → RS2[5-7] → AG1[7-9] → BWD1[9-12] → RS1[12-14] → AG0[14-16] → BWD0[16-19] → RS0[19-21]
+ * No Prefetch timeline (total 18 time units):
+ *   AG2[0-2] → BWD2[2-4] → RS2[4-6] → AG1[6-8] → BWD1[8-10] → RS1[10-12] → AG0[12-14] → BWD0[14-16] → RS0[16-18]
  *
- * With Prefetch timeline (total 17 time units):
- *   AG2[0-2] → BWD2[2-5] → AG1[5-7],RS2[7-9] → BWD1[7-10] → AG0[10-12],RS1[12-14] → BWD0[12-15] → RS0[15-17]
+ * With Prefetch timeline (total 14 time units):
+ *   AG2[0-2] → BWD2[2-4] → AG1[4-6] → RS2[6-8],BWD1[6-8] → AG0[8-10] → RS1[10-12],BWD0[10-12] → RS0[12-14]
  */
 
 const NP = {
   comm: [
     { label: "AG₂", cls: "ag",   start: 0,  dur: 2, step: 0 },
-    { label: "RS₂", cls: "rs",   start: 5,  dur: 2, step: 2 },
-    { label: "AG₁", cls: "ag",   start: 7,  dur: 2, step: 2 },
-    { label: "RS₁", cls: "rs",   start: 12, dur: 2, step: 4 },
-    { label: "AG₀", cls: "ag",   start: 14, dur: 2, step: 4 },
-    { label: "RS₀", cls: "rs",   start: 19, dur: 2, step: 6 },
+    { label: "idle", cls: "idle", start: 2,  dur: 2, step: 1 },
+    { label: "RS₂", cls: "rs",   start: 4,  dur: 2, step: 2 },
+    { label: "AG₁", cls: "ag",   start: 6,  dur: 2, step: 3 },
+    { label: "idle", cls: "idle", start: 8,  dur: 2, step: 4 },
+    { label: "RS₁", cls: "rs",   start: 10, dur: 2, step: 5 },
+    { label: "AG₀", cls: "ag",   start: 12, dur: 2, step: 6 },
+    { label: "idle", cls: "idle", start: 14, dur: 2, step: 7 },
+    { label: "RS₀", cls: "rs",   start: 16, dur: 2, step: 8 },
   ],
   compute: [
-    { label: "wait",   cls: "idle", start: 0,  dur: 2, step: 0 },
-    { label: "BWD₂",   cls: "bwd",  start: 2,  dur: 3, step: 1 },
-    { label: "idle",   cls: "idle", start: 5,  dur: 4, step: 2 },
-    { label: "BWD₁",   cls: "bwd",  start: 9,  dur: 3, step: 3 },
-    { label: "idle",   cls: "idle", start: 12, dur: 4, step: 4 },
-    { label: "BWD₀",   cls: "bwd",  start: 16, dur: 3, step: 5 },
+    { label: "idle",   cls: "idle", start: 0,  dur: 2, step: 0 },
+    { label: "BWD₂",   cls: "bwd",  start: 2,  dur: 2, step: 1 },
+    { label: "idle",   cls: "idle", start: 4,  dur: 2, step: 2 },
+    { label: "idle",   cls: "idle", start: 6,  dur: 2, step: 3 },
+    { label: "BWD₁",   cls: "bwd",  start: 8,  dur: 2, step: 4 },
+    { label: "idle",   cls: "idle", start: 10, dur: 2, step: 5 },
+    { label: "idle",   cls: "idle", start: 12, dur: 2, step: 6 },
+    { label: "BWD₀",   cls: "bwd",  start: 14, dur: 2, step: 7 },
   ],
 };
 
 const PF = {
   comm: [
     { label: "AG₂", cls: "ag",   start: 0,  dur: 2, step: 0 },
-    { label: "AG₁", cls: "ag",   start: 5,  dur: 2, step: 2 },
-    { label: "RS₂", cls: "rs",   start: 7,  dur: 2, step: 2 },
-    { label: "AG₀", cls: "ag",   start: 10, dur: 2, step: 4 },
-    { label: "RS₁", cls: "rs",   start: 12, dur: 2, step: 4 },
-    { label: "RS₀", cls: "rs",   start: 15, dur: 2, step: 6 },
+    { label: "idle", cls: "idle", start: 2,  dur: 2, step: 1 },
+    { label: "AG₁", cls: "ag",   start: 4,  dur: 2, step: 2 },
+    { label: "RS₂", cls: "rs",   start: 6,  dur: 2, step: 3 },
+    { label: "AG₀", cls: "ag",   start: 8,  dur: 2, step: 4 },
+    { label: "RS₁", cls: "rs",   start: 10, dur: 2, step: 5 },
+    { label: "RS₀", cls: "rs",   start: 12, dur: 2, step: 6 },
   ],
   compute: [
-    { label: "wait",   cls: "idle", start: 0,  dur: 2, step: 0 },
-    { label: "BWD₂",   cls: "bwd",  start: 2,  dur: 3, step: 1 },
-    { label: "wait",   cls: "idle", start: 5,  dur: 2, step: 2 },
-    { label: "BWD₁",   cls: "bwd",  start: 7,  dur: 3, step: 3 },
-    { label: "wait",   cls: "idle", start: 10, dur: 2, step: 4 },
-    { label: "BWD₀",   cls: "bwd",  start: 12, dur: 3, step: 5 },
+    { label: "idle",   cls: "idle", start: 0,  dur: 2, step: 0 },
+    { label: "BWD₂",   cls: "bwd",  start: 2,  dur: 2, step: 1 },
+    { label: "idle",   cls: "idle", start: 4,  dur: 2, step: 2 },
+    { label: "BWD₁",   cls: "bwd",  start: 6,  dur: 2, step: 3 },
+    { label: "idle",   cls: "idle", start: 8,  dur: 2, step: 4 },
+    { label: "BWD₀",   cls: "bwd",  start: 10, dur: 2, step: 5 },
   ],
 };
 
@@ -347,67 +355,137 @@ function buildAll() {
   [NP.comm, NP.compute, PF.comm, PF.compute].forEach(arr => arr.forEach(b => allBlocks.push(b)));
 }
 
-const STEPS = [
+const NP_STEPS = [
   {
     title: "AllGather U2",
-    detail: "Both modes start identically: AllGather unit 2's parameters on the producer stream. consumer stream is idle, waiting.",
+    detail: "No prefetch starts by AllGathering unit 2 on the producer stream while the consumer waits.",
   },
   {
     title: "Backward compute U2",
-    detail: "BWD₂ runs on the consumer stream while the producer stream is idle. Identical in both modes.",
+    detail: "BWD₂ runs once AG₂ finishes. The producer stream is idle during this compute slot.",
   },
   {
-    title: "Post-BWD₂: comm order differs",
-    detail: "No-prefetch issues RS₂ then AG₁ on the single producer stream — consumer stream idles for 4 units (RS+AG). Prefetch issues AG₁ before RS₂ — consumer stream only idles for 2 units (AG only). This is the key reordering.",
+    title: "First producer slot after BWD₂",
+    detail: "Without prefetch, the next producer slot is RS₂. The consumer cannot start BWD₁ yet, so it remains idle.",
+  },
+  {
+    title: "AllGather U1 arrives late",
+    detail: "AG₁ only starts after RS₂, which keeps the consumer idle for another slot.",
   },
   {
     title: "Backward compute U1",
-    detail: "BWD₁ starts at t=9 without prefetch but at t=7 with prefetch — the 2-unit head start from reordering AG₁ before RS₂ in the producer stream. Note RS₂ overlaps with BWD₁ across the two streams.",
+    detail: "BWD₁ finally starts at t=8. The earlier communication ordering exposed a visible idle gap before this compute.",
   },
   {
-    title: "Post-BWD₁: same pattern repeats",
-    detail: "Without prefetch: RS₁ then AG₀ (4 units idle). With prefetch: AG₀ then RS₁ (2 units idle). The savings compound.",
+    title: "Second ReduceScatter stall",
+    detail: "RS₁ runs next, and the consumer waits again because AG₀ has not been issued yet.",
+  },
+  {
+    title: "AllGather U0",
+    detail: "AG₀ arrives after RS₁, repeating the same serialized pattern one unit later.",
   },
   {
     title: "Backward compute U0",
-    detail: "BWD₀ starts at t=16 vs t=12. The gap between the two modes widens with each unit.",
+    detail: "The final backward compute only begins at t=14, after both earlier idle gaps have already accumulated.",
   },
   {
-    title: "Final ReduceScatter",
-    detail: "RS₀ completes the backward pass. No-prefetch finishes at t=21, prefetch at t=17 — a 19% improvement from simply reordering comm operations.",
+    title: "No-prefetch final ReduceScatter",
+    detail: "RS₀ completes the no-prefetch path at t=18. The prefetch pass will show how reordering removes those waits.",
   },
 ];
 
+const PF_STEPS = [
+  {
+    title: "AllGather U2",
+    detail: "Prefetch starts with the same AG₂ on the producer stream while the consumer waits.",
+  },
+  {
+    title: "Backward compute U2",
+    detail: "BWD₂ runs after AG₂, again matching the no-prefetch path so far.",
+  },
+  {
+    title: "Prefetch AG₁ early",
+    detail: "Instead of RS₂, the producer uses this slot for AG₁. That gets unit 1's parameters ready before its gradients are reduced.",
+  },
+  {
+    title: "Overlap at U1",
+    detail: "RS₂ now overlaps with BWD₁. This is the core prefetch win: communication is still happening, but compute no longer waits for it.",
+  },
+  {
+    title: "Prefetch AG₀ early",
+    detail: "The producer again issues the next AllGather before the current unit's ReduceScatter chain can create a bubble.",
+  },
+  {
+    title: "Second overlap window",
+    detail: "RS₁ overlaps with BWD₀, repeating the same pattern one unit later.",
+  },
+  {
+    title: "Prefetch final ReduceScatter",
+    detail: "RS₀ completes the prefetch path at t=14 instead of t=18, finishing four time units earlier.",
+  },
+];
+
+function visibleEnd(blocks, idx) {
+  return blocks.reduce((maxEnd, block) => (
+    block.step <= idx ? Math.max(maxEnd, block.start + block.dur) : maxEnd
+  ), 0);
+}
+
 const statusEl = document.getElementById("status");
 const detailEl = document.getElementById("detail");
+const pfPanelEl = document.getElementById("pf-panel");
+let phase = "np";
 let currentStep = -1;
 let animating = false;
 let skipRequested = false;
 let renderMode = "animate";
 
-function showStep(idx) {
-  allBlocks.forEach(b => {
-    b.el.classList.toggle("visible", b.step <= idx);
+function renderPhase() {
+  const npIdx = phase === "np" ? currentStep : NP_STEPS.length - 1;
+  const pfVisible = phase !== "np";
+  const pfIdx = phase === "pf" ? currentStep : -1;
+
+  pfPanelEl.classList.toggle("hidden", !pfVisible);
+
+  [...NP.comm, ...NP.compute].forEach(b => {
+    b.el.classList.toggle("visible", b.step <= npIdx);
     b.el.classList.remove("highlight");
   });
-  allBlocks.filter(b => b.step === idx).forEach(b => b.el.classList.add("highlight"));
 
-  document.getElementById("np-bar").style.width = `${Math.min(21, (idx + 1) * 3.5) * U}px`;
-  document.getElementById("pf-bar").style.width = `${Math.min(17, (idx + 1) * 3) * U}px`;
+  [...PF.comm, ...PF.compute].forEach(b => {
+    b.el.classList.toggle("visible", pfVisible && b.step <= pfIdx);
+    b.el.classList.remove("highlight");
+  });
 
-  if (idx >= 0 && idx < STEPS.length) {
-    statusEl.textContent = `${idx + 1}/${STEPS.length}  ${STEPS[idx].title}`;
-    detailEl.textContent = STEPS[idx].detail;
+  if (phase === "np" && currentStep >= 0) {
+    [...NP.comm, ...NP.compute].filter(b => b.step === currentStep).forEach(b => b.el.classList.add("highlight"));
+    statusEl.textContent = `${currentStep + 1}/${NP_STEPS.length}  No Prefetch: ${NP_STEPS[currentStep].title}`;
+    detailEl.textContent = NP_STEPS[currentStep].detail;
+  } else if (phase === "pf" && currentStep >= 0) {
+    [...PF.comm, ...PF.compute].filter(b => b.step === currentStep).forEach(b => b.el.classList.add("highlight"));
+    statusEl.textContent = `${currentStep + 1}/${PF_STEPS.length}  Prefetch: ${PF_STEPS[currentStep].title}`;
+    detailEl.textContent = PF_STEPS[currentStep].detail;
+  } else if (phase === "pf" && currentStep < 0) {
+    statusEl.textContent = "Prefetch Ready";
+    detailEl.textContent = "The prefetch schedule is now visible below. Step again to walk through its reordered communication.";
+  } else {
+    statusEl.textContent = "Ready";
+    detailEl.textContent = "Start with the no-prefetch schedule. After it completes, the prefetch schedule appears below.";
   }
+
+  document.getElementById("np-bar").style.width = `${visibleEnd([...NP.comm, ...NP.compute], npIdx) * U}px`;
+  document.getElementById("pf-bar").style.width = `${pfVisible ? visibleEnd([...PF.comm, ...PF.compute], pfIdx) * U : 0}px`;
 }
 
 function resetViz() {
+  phase = "np";
   currentStep = -1;
   allBlocks.forEach(b => b.el.classList.remove("visible", "highlight"));
   document.getElementById("np-bar").style.width = "0";
   document.getElementById("pf-bar").style.width = "0";
+  pfPanelEl.classList.add("hidden");
   statusEl.textContent = "Ready";
-  detailEl.textContent = "Step through to compare backward passes with and without prefetching. Idle gaps show where compute waits for comm.";
+  detailEl.textContent = "Start with the no-prefetch schedule. After it completes, the prefetch schedule appears below.";
 }
 
 function sleep(ms) {
@@ -423,36 +501,100 @@ function sleep(ms) {
 }
 
 function refreshControls() {
-  document.getElementById("btn-prev").disabled = animating || currentStep <= 0;
+  const atBeginning = phase === "np" && currentStep <= 0;
+  document.getElementById("btn-prev").disabled = animating || atBeginning;
 }
 
 async function playAll() {
   if (animating) { skipRequested = true; return; }
   animating = true;
+  skipRequested = false;
   refreshControls();
-  if (currentStep >= STEPS.length - 1) { resetViz(); await sleep(300); }
-  while (currentStep < STEPS.length - 1) {
-    currentStep++;
-    showStep(currentStep);
-    await sleep(1400);
+
+  if (phase === "pf" && currentStep >= PF_STEPS.length - 1) {
+    resetViz();
+    await sleep(300);
   }
+
+  while (true) {
+    if (phase === "np") {
+      if (currentStep < NP_STEPS.length - 1) {
+        currentStep++;
+        renderPhase();
+        await sleep(1400);
+        continue;
+      }
+      phase = "pf";
+      currentStep = -1;
+      renderPhase();
+      await sleep(700);
+      continue;
+    }
+
+    if (phase === "pf" && currentStep < PF_STEPS.length - 1) {
+      currentStep++;
+      renderPhase();
+      await sleep(1400);
+      continue;
+    }
+
+    break;
+  }
+
   animating = false;
+  skipRequested = false;
   refreshControls();
 }
 
 async function stepOnce() {
   if (animating) { skipRequested = true; return; }
+  if (phase === "np") {
+    if (currentStep < NP_STEPS.length - 1) {
+      currentStep++;
+      renderPhase();
+      refreshControls();
+      return;
+    }
+    phase = "pf";
+    currentStep = -1;
+    renderPhase();
+    refreshControls();
+    return;
+  }
+
   currentStep++;
-  if (currentStep >= STEPS.length) { resetViz(); refreshControls(); return; }
-  showStep(currentStep);
+  if (currentStep >= PF_STEPS.length) { resetViz(); refreshControls(); return; }
+  renderPhase();
   refreshControls();
 }
 
 async function stepPrev() {
-  if (animating || currentStep <= 0) return;
-  currentStep--;
-  if (currentStep < 0) { resetViz(); refreshControls(); return; }
-  showStep(currentStep);
+  if (animating) return;
+  if (phase === "np") {
+    if (currentStep <= 0) return;
+    currentStep--;
+    renderPhase();
+    refreshControls();
+    return;
+  }
+
+  if (currentStep > 0) {
+    currentStep--;
+    renderPhase();
+    refreshControls();
+    return;
+  }
+
+  if (currentStep === 0) {
+    currentStep = -1;
+    renderPhase();
+    refreshControls();
+    return;
+  }
+
+  phase = "np";
+  currentStep = NP_STEPS.length - 1;
+  renderPhase();
   refreshControls();
 }
 

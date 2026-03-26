@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FSDP End-to-End HBM Movement</title>
+<title>FSDP End-to-End</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -40,50 +40,6 @@
     font-weight: 700;
     letter-spacing: 0.03em;
     margin-bottom: 28px;
-  }
-
-  .timeline {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 24px;
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-
-  .phase-pill {
-    padding: 10px 14px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: rgba(26, 29, 39, 0.92);
-    color: var(--muted);
-    min-width: 132px;
-    text-align: center;
-    transition: border-color 0.25s, box-shadow 0.25s, color 0.25s, background 0.25s;
-  }
-
-  .phase-pill .phase-name {
-    display: block;
-    font-size: 1.4rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 3px;
-  }
-
-  .phase-pill .phase-step {
-    font-size: 1.5rem;
-  }
-
-  .phase-pill.active {
-    color: var(--text);
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px rgba(137, 167, 255, 0.25), 0 14px 28px rgba(0, 0, 0, 0.18);
-    background: rgba(26, 29, 39, 1);
-  }
-
-  .phase-pill.done {
-    color: #cbd3ee;
-    border-color: rgba(137, 167, 255, 0.35);
   }
 
   #stage {
@@ -370,22 +326,7 @@
 </head>
 <body>
 
-<h1>FSDP End-to-End HBM Movement</h1>
-<div class="timeline">
-  <div class="phase-pill" id="phase-forward">
-    <span class="phase-name">Forward</span>
-    <span class="phase-step" id="phase-forward-step">Awaiting U1</span>
-  </div>
-  <div class="phase-pill" id="phase-backward">
-    <span class="phase-name">Backward</span>
-    <span class="phase-step" id="phase-backward-step">Waiting</span>
-  </div>
-  <div class="phase-pill" id="phase-optimizer">
-    <span class="phase-name">Optimizer</span>
-    <span class="phase-step" id="phase-optimizer-step">Waiting</span>
-  </div>
-</div>
-
+<h1>FSDP End-to-End </h1>
 <div id="stage"></div>
 
 <div class="controls">
@@ -476,16 +417,6 @@ const gradBuffers = {};
 const optSlotEls = {};
 const optBlockEls = {};
 const optBuffers = {};
-const phaseEls = {
-  forward: document.getElementById("phase-forward"),
-  backward: document.getElementById("phase-backward"),
-  optimizer: document.getElementById("phase-optimizer"),
-};
-const phaseTextEls = {
-  forward: document.getElementById("phase-forward-step"),
-  backward: document.getElementById("phase-backward-step"),
-  optimizer: document.getElementById("phase-optimizer-step"),
-};
 
 const DUR = {
   fly: 850,
@@ -672,17 +603,7 @@ function scheduleSkippable(callback, ms) {
   requestAnimationFrame(watchSkip);
 }
 
-function setPhaseState(activePhase, stepText) {
-  const forwardDone = activePhase === "backward" || activePhase === "optimizer";
-  const backwardDone = activePhase === "optimizer";
-  Object.entries(phaseEls).forEach(([phase, el]) => {
-    el.classList.toggle("active", phase === activePhase);
-    el.classList.toggle("done", (phase === "forward" && forwardDone) || (phase === "backward" && backwardDone));
-  });
-  if (stepText.forward) phaseTextEls.forward.textContent = stepText.forward;
-  if (stepText.backward) phaseTextEls.backward.textContent = stepText.backward;
-  if (stepText.optimizer) phaseTextEls.optimizer.textContent = stepText.optimizer;
-}
+function setPhaseState() {}
 
 function setStatus(title, detail) {
   statusEl.textContent = `${currentStep + 1}/${STEPS.length}  ${title}`;
@@ -1034,12 +955,6 @@ function resetMemoryState() {
     CONFIG.units.forEach(unit => clearSlot(activationSlots[rank][unit.id]));
   });
   Object.values(gradSlots).forEach(clearSlot);
-  phaseEls.forward.classList.remove("active", "done");
-  phaseEls.backward.classList.remove("active", "done");
-  phaseEls.optimizer.classList.remove("active", "done");
-  phaseTextEls.forward.textContent = "Awaiting U1";
-  phaseTextEls.backward.textContent = "Waiting";
-  phaseTextEls.optimizer.textContent = "Waiting";
 }
 
 const STEPS = [

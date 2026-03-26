@@ -107,21 +107,16 @@
     <li>
       <a href="hybrid_reduce.html">Reduce-scatter + all-reduce<span>Hybrid sharding: gradients within sharding groups, then sync across replicas.</span></a>
     </li>
-    <li>
+    <!-- <li>
       <a href="fsdp_gather_uneven.html">Even vs uneven shards<span>All-gather when shard sizes differ.</span></a>
-    </li>
+    </li> -->
     <li>
       <a href="fsdp_e2e_hbm.html">FSDP end-to-end (HBM)<span>Forward, backward, and optimizer steps on device memory.</span></a>
     </li>
-    <li>
+    <!-- <li>
       <a href="ddp_e2e_hbm.html">DDP end-to-end (HBM)<span>Same pipeline view for standard data parallel.</span></a>
-    </li>
-    <li>
-      <a href="fsdp_e2e_hbm_half.html">FSDP end-to-end (mixed precision)<span>Same HBM timeline as the FP32 demo; half-sized transient slots for gathered params and full ∇ (paper native mixed precision).</span></a>
-    </li>
-    <li>
-      <a href="moe_expert_parallel.html">MoE: Expert Parallelism + FSDP<span>2 ranks, 2 experts. FSDP AllGather for attention, All-to-All token dispatch for experts. Based on torchtitan dp2ep, not the FSDP paper.</span></a>
-    </li>
+    </li> -->
+
     <li>
       <a href="fsdp_prefetch.html">Backward prefetching<span>Gantt-chart timeline comparing no-prefetch vs prefetch. Shows how reordering AllGather before ReduceScatter eliminates idle gaps. Paper § 3.3.2.</span></a>
     </li>
@@ -133,6 +128,12 @@
     </li>
     <li>
       <a href="fsdp_rate_limiter.html">Rate limiter<span>CPU/GPU Gantt chart showing how capping inflight AllGathers prevents memory spikes and cudaMalloc retries. Paper § 3.4.</span></a>
+    </li>
+    <li>
+      <a href="fsdp_e2e_hbm_half.html">FSDP end-to-end (mixed precision)<span>Same HBM timeline as the FP32 demo; half-sized transient slots for gathered params and full ∇ (paper native mixed precision).</span></a>
+    </li>
+    <li>
+      <a href="moe_expert_parallel.html">MoE: Expert Parallelism + FSDP<span>2 ranks, 2 experts. FSDP AllGather for attention, All-to-All token dispatch for experts. Based on torchtitan dp2ep, not the FSDP paper.</span></a>
     </li>
   </ul>
 </div>
